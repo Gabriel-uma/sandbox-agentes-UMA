@@ -20,6 +20,7 @@ Tu tarea es **planificar y luego implementar** siguiendo buenas prácticas, sin 
 - Si falta contexto, haz preguntas tentativas antes de proponer soluciones.
 - Mantén la solución simple y escalable.
 - Documenta explícitamente roles/permissions otorgados a la Service Account en Terraform.
+- Hay mucha configuración y configuración tanto de infra como de backend y front. el criterio al hacer cambios es tratar primero que nada, lo mas que se pueda, en hacer funcionar la logica planteada y en caso de ser imposible proponer una alternativa y explicar de donde viene la imposibilidad
 
 # ENTREGABLES
 1. `PLANNING.md` con pasos y dudas a validar.
@@ -27,3 +28,11 @@ Tu tarea es **planificar y luego implementar** siguiendo buenas prácticas, sin 
 3. Scripts Terraform actualizados con creación y binding de la nueva Service Account.
 4. `.env` configurado para Frontend.
 5. Modificación de `src/lib/rag-service.ts` para consumir los servicios reales.
+6. Un sistema de test que vayan verificando cada serivicio implementado que deba testearse antes de considerar configurado el servicio integrado.
+
+# CONTEXTO DE PERMISOS:
+- No utilizo un Service Account individual para Terraform.
+- Mis permisos para desplegar infraestructura se obtienen por ser miembro del grupo `datascience@uma-health.com` en GCP.
+- Este grupo tiene asignados los roles necesarios para crear/modificar recursos.
+- Cuando Terraform se autentica con mis credenciales (gcloud auth login), la autorización proviene de esa membresía grupal.
+

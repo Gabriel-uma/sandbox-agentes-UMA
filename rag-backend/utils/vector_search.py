@@ -1,115 +1,99 @@
 """
-Búsqueda vectorial usando Vertex AI Matching Engine
+Vector search helpers backed by Vertex AI Matching Engine.
 """
 import os
-from typing import List, Dict, Tuple
+from typing import List, Dict
+
 from google.cloud import aiplatform
 from vertexai.language_models import TextEmbeddingModel
+
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class VectorSearch:
-    """Gestiona búsquedas vectoriales en Vertex AI"""
+    """Wrapper around Vertex AI Matching Engine for nearest-neighbour lookups."""
 
-    def __init__(self):
-        self.project_id = os.environ.get('PROJECT_ID')
-        self.region = os.environ.get('REGION', 'us-central1')
-        self.index_endpoint = os.environ.get('INDEX_ENDPOINT')
-        self.deployed_index_id = os.environ.get('DEPLOYED_INDEX_ID', 'rag-deployed-index')
+    def __init__(self) -> None:
+        self.project_id = os.environ.get("PROJECT_ID")
+        self.region = os.environ.get("REGION", "us-central1")
+        self.index_endpoint = os.environ.get("INDEX_ENDPOINT")
+        self.deployed_index_id = os.environ.get("DEPLOYED_INDEX_ID")
 
         if not self.project_id:
             raise ValueError("PROJECT_ID environment variable is required")
 
+        if not self.index_endpoint:
+            raise ValueError("INDEX_ENDPOINT environment variable is required for vector search")
+
+        if not self.deployed_index_id:
+            raise ValueError("DEPLOYED_INDEX_ID environment variable is required for vector search")
+
         aiplatform.init(project=self.project_id, location=self.region)
 
-        # Inicializar modelo de embeddings para queries
-        self.embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
+        embedding_model_name = os.environ.get("EMBEDDING_MODEL_NAME", "text-embedding-004")
+        try:
+            self.embedding_model = TextEmbeddingModel.from_pretrained(embedding_model_name)
+            logger.info("Loaded embedding model: %s", embedding_model_name)
+        except Exception as exc:
+            fallback_name = "text-multilingual-embedding-002"
+            logger.warning(
+                "Failed to load %s (%s). Trying %s instead.",
+                embedding_model_name,
+                exc,
+                fallback_name,
+            )
+            self.embedding_model = TextEmbeddingModel.from_pretrained(fallback_name)
+            logger.info("Loaded embedding model: %s", fallback_name)
 
-        logger.info(f"Vector search initialized for project {self.project_id}")
+        logger.info(
+            "Vector search initialized for project %s using endpoint %s",
+            self.project_id,
+            self.index_endpoint,
+        )
 
-    def search_similar_documents(
-        self,
-        query: str,
-        top_k: int = 5
-    ) -> List[Dict[str, any]]:
+    def search_similar_documents(self, query: str, top_k: int = 5) -> List[Dict[str, float]]:
         """
-        Busca documentos similares usando búsqueda vectorial
+        Retrieve the closest document chunks for the supplied query.
 
         Args:
-            query: Pregunta del usuario
-            top_k: Número de resultados a retornar
+            query: Natural language question from the user.
+            top_k: Amount of neighbours to return.
 
         Returns:
-            Lista de documentos similares con scores
+            A list of dictionaries containing ids, distances and scores.
         """
         try:
-            # 1. Generar embedding de la query
-            logger.info(f"Generating embedding for query: {query[:50]}...")
+            logger.info("Generating embedding for query: %s...", query[:50])
             query_embedding = self.embedding_model.get_embeddings([query])[0].values
 
-            # 2. Buscar en el índice (simulado por ahora si no hay index_endpoint)
-            if not self.index_endpoint:
-                logger.warning("INDEX_ENDPOINT not configured, returning mock results")
-                return self._mock_search_results(query, top_k)
+            endpoint = aiplatform.MatchingEngineIndexEndpoint(
+                index_endpoint_name=self.index_endpoint
+            )
+            response = endpoint.find_neighbors(
+                deployed_index_id=self.deployed_index_id,
+                queries=[query_embedding],
+                num_neighbors=top_k,
+            )
 
-            # 3. Realizar búsqueda real en Vertex AI Matching Engine
-            # Nota: La implementación completa requiere que el índice esté desplegado
-            try:
-                endpoint = aiplatform.MatchingEngineIndexEndpoint(
-                    index_endpoint_name=self.index_endpoint
-                )
-
-                response = endpoint.find_neighbors(
-                    deployed_index_id=self.deployed_index_id,
-                    queries=[query_embedding],
-                    num_neighbors=top_k
-                )
-
-                results = []
-                if response and len(response) > 0:
-                    for neighbor in response[0]:
-                        results.append({
-                            'id': neighbor.id,
-                            'distance': neighbor.distance,
-                            'score': 1.0 - neighbor.distance  # Convertir distancia a score
-                        })
-
-                logger.info(f"Found {len(results)} similar documents")
-                return results
-
-            except Exception as e:
-                logger.warning(f"Error querying index endpoint: {str(e)}, using mock results")
-                return self._mock_search_results(query, top_k)
-
-        except Exception as e:
-            logger.error(f"Error in vector search: {str(e)}")
+            results: List[Dict[str, float]] = []
+            if response and response[0]:
+                for neighbor in response[0]:
+                    results.append(
+                        {
+                            "id": neighbor.id,
+                            "distance": neighbor.distance,
+                            "score": 1.0 - neighbor.distance,
+                        }
+                    )
+            logger.info("Found %d similar documents", len(results))
+            return results
+        except Exception as exc:
+            logger.error("Error querying index endpoint: %s", exc)
             raise
 
-    def _mock_search_results(self, query: str, top_k: int) -> List[Dict[str, any]]:
-        """
-        Genera resultados mock cuando el índice no está disponible
-        """
-        return [
-            {
-                'id': f'doc_{i}_chunk_0',
-                'distance': 0.1 + (i * 0.05),
-                'score': 0.9 - (i * 0.05)
-            }
-            for i in range(min(top_k, 3))
-        ]
-
     def get_query_embedding(self, query: str) -> List[float]:
-        """
-        Genera embedding para una query
-
-        Args:
-            query: Texto de la query
-
-        Returns:
-            Vector de embedding
-        """
+        """Return the embedding vector for the supplied query string."""
         embedding = self.embedding_model.get_embeddings([query])[0]
         return embedding.values

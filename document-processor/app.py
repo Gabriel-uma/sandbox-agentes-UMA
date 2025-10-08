@@ -1,3 +1,4 @@
+
 """
 Document Processor Service
 Servicio para procesar documentos, generar embeddings e indexar en Vertex AI
@@ -5,11 +6,13 @@ Servicio para procesar documentos, generar embeddings e indexar en Vertex AI
 import os
 import uuid
 import tempfile
-from flask import Flask, request, jsonify
+from datetime import datetime, timezone
+from io import BytesIO
+from flask import Flask, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import logging
 
-from utils import TextExtractor, EmbeddingGenerator, StorageManager
+from utils import TextExtractor, EmbeddingGenerator, StorageManager, IndexManager
 
 # Configuración de logging
 logging.basicConfig(
@@ -26,11 +29,18 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max
 try:
     embedding_generator = EmbeddingGenerator()
     storage_manager = StorageManager()
+    index_manager = IndexManager()
     logger.info("Services initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize services: {str(e)}")
     embedding_generator = None
     storage_manager = None
+    index_manager = None
+
+
+def services_ready() -> bool:
+    """Verifica que los servicios requeridos estén inicializados."""
+    return bool(embedding_generator and storage_manager and index_manager)
 
 
 @app.route('/health', methods=['GET'])
@@ -42,8 +52,7 @@ def health_check():
         'version': '1.0.0'
     }
 
-    # Verificar que los servicios estén inicializados
-    if not embedding_generator or not storage_manager:
+    if not services_ready():
         status['status'] = 'unhealthy'
         status['error'] = 'Services not properly initialized'
         return jsonify(status), 503
@@ -53,20 +62,14 @@ def health_check():
 
 @app.route('/upload', methods=['POST'])
 def upload_document():
-    """
-    Endpoint para subir y procesar documentos
-
-    Proceso:
-    1. Recibir archivo
-    2. Validar formato
-    3. Extraer texto
-    4. Dividir en chunks
-    5. Generar embeddings
-    6. Subir a GCS
-    7. Preparar para indexación en Vertex AI
-    """
+    """Sube, procesa y registra un documento."""
     try:
-        # Validar que se haya enviado un archivo
+        if not services_ready():
+            return jsonify({
+                'error': 'Service unavailable',
+                'details': 'Required services are not initialized'
+            }), 503
+
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
 
@@ -75,7 +78,6 @@ def upload_document():
         if file.filename == '':
             return jsonify({'error': 'Empty filename'}), 400
 
-        # Validar formato
         filename = secure_filename(file.filename)
         _, ext = os.path.splitext(filename.lower())
 
@@ -85,47 +87,35 @@ def upload_document():
                 'supported_formats': list(TextExtractor.SUPPORTED_FORMATS)
             }), 400
 
-        # Generar ID único para el documento
         document_id = str(uuid.uuid4())
         logger.info(f"Processing document {document_id}: {filename}")
 
-        # Guardar archivo temporalmente
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
             file.save(temp_file.name)
             temp_path = temp_file.name
 
         try:
-            # 1. Extraer texto
             logger.info(f"Extracting text from {filename}")
             text, doc_type = TextExtractor.extract_text(temp_path, filename)
 
             if not text or len(text.strip()) < 10:
-                return jsonify({
-                    'error': 'No text could be extracted from document'
-                }), 400
+                return jsonify({'error': 'No text could be extracted from document'}), 400
 
-            # 2. Dividir en chunks
             logger.info("Chunking text")
             chunks = TextExtractor.chunk_text(text, chunk_size=500, overlap=50)
 
             if not chunks:
-                return jsonify({
-                    'error': 'Failed to create text chunks'
-                }), 500
+                return jsonify({'error': 'Failed to create text chunks'}), 500
 
-            # 3. Generar embeddings
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
             embeddings = embedding_generator.generate_embeddings(chunks)
 
-            # 4. Subir documento original a GCS
             logger.info("Uploading original document to GCS")
             doc_uri = storage_manager.upload_document(temp_path, document_id, filename)
 
-            # 5. Subir chunks procesados
             logger.info("Uploading processed chunks to GCS")
             chunks_uri = storage_manager.upload_text_chunks(document_id, chunks)
 
-            # 6. Subir embeddings metadata para Vertex AI
             logger.info("Uploading embeddings metadata")
             embeddings_uri = storage_manager.upload_embeddings_metadata(
                 document_id,
@@ -133,14 +123,33 @@ def upload_document():
                 chunks
             )
 
-            response = {
-                'status': 'success',
+            logger.info("Updating Matching Engine index with new embeddings")
+            try:
+                index_manager.import_embeddings(embeddings_uri)
+            except Exception as exc:
+                logger.error("Failed to update index with embeddings: %s", exc, exc_info=True)
+                try:
+                    storage_manager.delete_document(document_id)
+                except Exception as cleanup_exc:
+                    logger.warning("Failed to rollback storage for %s: %s", document_id, cleanup_exc)
+                return jsonify({
+                    'error': 'Failed to index document in Matching Engine',
+                    'details': str(exc)
+                }), 500
+
+            file_size = os.path.getsize(temp_path)
+            uploaded_at = datetime.now(timezone.utc).isoformat()
+
+            metadata = {
                 'document_id': document_id,
                 'filename': filename,
                 'document_type': doc_type,
+                'mime_type': file.mimetype,
+                'size': file_size,
+                'uploaded_at': uploaded_at,
+                'status': 'ready',
                 'total_chunks': len(chunks),
                 'total_characters': len(text),
-                'message': 'Document processed and indexed successfully',
                 'uris': {
                     'document': doc_uri,
                     'chunks': chunks_uri,
@@ -148,17 +157,37 @@ def upload_document():
                 }
             }
 
+            metadata_uri = storage_manager.save_document_metadata(document_id, metadata)
+            metadata['uris']['metadata'] = metadata_uri
+
+            response = {
+                'status': 'ready',
+                'document_id': document_id,
+                'filename': filename,
+                'document_type': doc_type,
+                'mime_type': file.mimetype,
+                'size': file_size,
+                'uploaded_at': uploaded_at,
+                'total_chunks': len(chunks),
+                'total_characters': len(text),
+                'message': 'Document processed and indexed successfully',
+                'uris': metadata['uris']
+            }
+
             logger.info(f"Document {document_id} processed successfully")
             return jsonify(response), 200
 
         finally:
-            # Limpiar archivo temporal
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
 
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
         return jsonify({'error': str(e)}), 400
+
+    except RuntimeError as e:
+        logger.error(f"Embedding service error: {str(e)}")
+        return jsonify({'error': 'Embedding service unavailable', 'details': str(e)}), 503
 
     except Exception as e:
         logger.error(f"Error processing document: {str(e)}", exc_info=True)
@@ -168,28 +197,67 @@ def upload_document():
         }), 500
 
 
+@app.route('/documents', methods=['GET'])
+def list_documents():
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
+    try:
+        documents = storage_manager.list_documents()
+        return jsonify({'documents': documents}), 200
+    except Exception as e:
+        logger.error(f"Error listing documents: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to list documents', 'details': str(e)}), 500
+
+
 @app.route('/documents/<document_id>', methods=['GET'])
 def get_document_info(document_id):
-    """
-    Obtener información de un documento procesado
-    """
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
     try:
+        metadata = storage_manager.get_document_metadata(document_id)
+        if not metadata:
+            return jsonify({'error': 'Document not found'}), 404
+
         chunks = storage_manager.get_document_chunks(document_id)
-
-        if not chunks:
-            return jsonify({
-                'error': 'Document not found or no chunks available'
-            }), 404
-
-        return jsonify({
-            'document_id': document_id,
-            'total_chunks': len(chunks),
-            'status': 'processed'
-        }), 200
-
+        metadata['chunks'] = chunks
+        metadata['total_chunks'] = len(chunks)
+        return jsonify(metadata), 200
     except Exception as e:
-        logger.error(f"Error retrieving document info: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error retrieving document info: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to retrieve document info', 'details': str(e)}), 500
+
+
+@app.route('/documents/<document_id>', methods=['DELETE'])
+def delete_document(document_id):
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
+    try:
+        deleted = storage_manager.delete_document(document_id)
+        if not deleted:
+            return jsonify({'error': 'Document not found'}), 404
+        return jsonify({'status': 'deleted', 'document_id': document_id}), 200
+    except Exception as e:
+        logger.error(f"Error deleting document: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to delete document', 'details': str(e)}), 500
+
+
+@app.route('/documents/<document_id>/download', methods=['GET'])
+def download_document(document_id):
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
+    try:
+        content, filename, mime_type = storage_manager.download_document_content(document_id)
+        return send_file(
+            BytesIO(content),
+            mimetype=mime_type or 'application/octet-stream',
+            as_attachment=True,
+            download_name=filename,
+        )
+    except FileNotFoundError:
+        return jsonify({'error': 'Document not found'}), 404
+    except Exception as e:
+        logger.error(f"Error generating download: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to download document', 'details': str(e)}), 500
 
 
 @app.errorhandler(413)

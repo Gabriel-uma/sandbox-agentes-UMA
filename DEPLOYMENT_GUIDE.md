@@ -264,6 +264,32 @@ terraform destroy
 - Verificar que las variables de entorno estén configuradas correctamente
 - Hacer health check a los servicios
 
+### Activar modo API publica de Gemini (opcional)
+- Habilitar la API y crear una API Key:
+  ```bash
+  gcloud services enable generativelanguage.googleapis.com --project=uma-tech-ai-lab
+  gcloud alpha services api-keys create \
+    --display-name="rag-genai" \
+    --project=uma-tech-ai-lab \
+    --restrictions="apiTargets=generativelanguage.googleapis.com"
+  ```
+- Guardar la clave en Secret Manager:
+  ```bash
+  gcloud secrets create GENAI_API_KEY --replication-policy=automatic --project=uma-tech-ai-lab
+  echo -n "API_KEY_AQUI" | gcloud secrets versions add GENAI_API_KEY --data-file=- --project=uma-tech-ai-lab
+  ```
+- Redeploy Cloud Run con la variable/secret:
+  ```bash
+  gcloud run deploy rag-agent-backend \
+    --image gcr.io/uma-tech-ai-lab/rag-backend:latest \
+    --project uma-tech-ai-lab \
+    --region us-central1 \
+    --set-env-vars PROJECT_ID=uma-tech-ai-lab,REGION=us-central1,MODEL_NAME=models/gemini-2.5-flash,INDEX_ENDPOINT=<endpoint_full_name>,DEPLOYED_INDEX_ID=<deployed_index_id> \
+    --set-secrets GENAI_API_KEY=GENAI_API_KEY:latest
+  ```
+  > Reemplaza `<endpoint_full_name>` y `<deployed_index_id>` con los valores reales del Matching Engine (Terraform output o comando `gcloud ai index-endpoints describe`).
+- Para volver a Vertex AI nativo, eliminar `GENAI_API_KEY` y redeploy. El backend detecta automaticamente el modo.
+
 ### Frontend no conecta con backend
 - Verificar que `.env` tenga las URLs correctas
 - Verificar que los servicios Cloud Run permitan tráfico no autenticado

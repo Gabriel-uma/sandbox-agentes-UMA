@@ -1,13 +1,24 @@
 // RAG Service - Cliente real para servicios backend en GCP
 // Conecta con Document Processor y RAG Backend en Cloud Run
 
+export type DocumentStatus = 'uploading' | 'processing' | 'ready' | 'error'
+
 export interface Document {
   id: string
   name: string
   size: number
   uploadedAt: Date
-  status: 'processing' | 'ready' | 'error'
+  status: DocumentStatus
   type: string
+  mimeType?: string
+  totalChunks?: number
+  totalCharacters?: number
+  uris?: {
+    document?: string
+    chunks?: string
+    embeddings?: string
+    metadata?: string
+  }
 }
 
 export interface ChatMessage {
@@ -33,6 +44,37 @@ const RAG_BACKEND_URL = import.meta.env.VITE_RAG_BACKEND_URL || ''
 class RAGService {
   private documents: Document[] = []
   private currentConversationId: string | null = null
+  private normalizeDocument(data: any): Document {
+    const uploadedAt = data.uploaded_at ?? data.uploadedAt ?? new Date().toISOString()
+    const status = (data.status ?? 'ready') as DocumentStatus
+
+    const generatedId = (globalThis.crypto?.randomUUID?.() as string | undefined) ?? `temp_${Math.random().toString(36).slice(2)}`
+
+    return {
+      id: data.document_id ?? data.id ?? generatedId,
+      name: data.filename ?? data.name ?? 'Documento',
+      size: Number(data.size ?? 0),
+      uploadedAt: new Date(uploadedAt),
+      status,
+      type: data.document_type ?? data.type ?? 'application/octet-stream',
+      mimeType: data.mime_type ?? data.mimeType,
+      totalChunks: data.total_chunks ?? data.totalChunks,
+      totalCharacters: data.total_characters ?? data.totalCharacters,
+      uris: data.uris ?? {},
+    }
+  }
+
+  private upsertDocument(document: Document): Document {
+    const index = this.documents.findIndex((doc) => doc.id === document.id)
+
+    if (index >= 0) {
+      this.documents.splice(index, 1, document)
+    } else {
+      this.documents = [document, ...this.documents]
+    }
+
+    return document
+  }
 
   /**
    * Sube un documento al Document Processor
@@ -48,37 +90,107 @@ class RAGService {
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Error uploading document')
+        const contentType = response.headers.get('content-type')
+
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json()
+          throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+        }
+
+        const htmlError = await response.text()
+        console.error('HTML Error Response:', htmlError)
+        throw new Error(`Error ${response.status}: El servidor backend no está disponible o no tiene permisos configurados correctamente`)
       }
 
       const result = await response.json()
+      const document = this.normalizeDocument({
+        ...result,
+        size: result.size ?? file.size,
+        filename: result.filename ?? file.name,
+        document_type: result.document_type ?? file.type,
+      })
 
-      // Crear documento en formato local
-      const document: Document = {
-        id: result.document_id,
-        name: result.filename || file.name,
-        size: file.size,
-        uploadedAt: new Date(),
-        status: 'ready',
-        type: result.document_type || file.type
-      }
-
-      this.documents.push(document)
+      this.upsertDocument(document)
       return document
-
     } catch (error) {
       console.error('Error uploading document:', error)
-      throw error
+      const message = error instanceof Error ? error : new Error('Error uploading document')
+      throw message
     }
   }
 
-  /**
-   * Elimina un documento (nota: requeriría endpoint de eliminación en el backend)
-   */
+  async fetchDocuments(): Promise<Document[]> {
+    try {
+      const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/documents`, {
+        method: 'GET',
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      const documentsArray = Array.isArray(result.documents) ? result.documents : []
+      this.documents = documentsArray
+        .map((item: any) => this.normalizeDocument(item))
+        .sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())
+      return this.documents
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+      const message = error instanceof Error ? error : new Error('Error fetching documents')
+      throw message
+    }
+  }
+
   async deleteDocument(documentId: string): Promise<void> {
-    this.documents = this.documents.filter(doc => doc.id !== documentId)
-    // TODO: Implementar endpoint DELETE en el backend si es necesario
+    try {
+      const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/documents/${documentId}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+      }
+
+      this.documents = this.documents.filter((doc) => doc.id !== documentId)
+    } catch (error) {
+      console.error('Error deleting document:', error)
+      const message = error instanceof Error ? error : new Error('Error deleting document')
+      throw message
+    }
+  }
+
+  async downloadDocument(documentId: string): Promise<{ blob: Blob; filename: string }> {
+    try {
+      const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/documents/${documentId}/download`, {
+        method: 'GET',
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+      }
+
+      const blob = await response.blob()
+      const disposition = response.headers.get('content-disposition') || ''
+      let filename = `document-${documentId}`
+      const match = disposition.match(/filename="?([^";]+)"?/i)
+      if (match && match[1]) {
+        try {
+          filename = decodeURIComponent(match[1])
+        } catch {
+          filename = match[1]
+        }
+      }
+
+      return { blob, filename }
+    } catch (error) {
+      console.error('Error downloading document:', error)
+      const message = error instanceof Error ? error : new Error('Error downloading document')
+      throw message
+    }
   }
 
   /**
@@ -110,8 +222,15 @@ class RAGService {
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Error querying RAG')
+        const contentType = response.headers.get('content-type')
+
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json()
+          throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+        }
+
+        const textError = await response.text()
+        throw new Error(`Error ${response.status}: ${textError || response.statusText}`)
       }
 
       const result = await response.json()
@@ -153,8 +272,14 @@ class RAGService {
         if (response.status === 404) {
           return []
         }
-        const error = await response.json()
-        throw new Error(error.error || 'Error fetching conversation history')
+        const contentType = response.headers.get('content-type')
+
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json()
+          throw new Error(error.error || 'Error fetching conversation history')
+        }
+
+        throw new Error(`Error ${response.status}: ${response.statusText}`)
       }
 
       const result = await response.json()
@@ -185,8 +310,14 @@ class RAGService {
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Error listing conversations')
+        const contentType = response.headers.get('content-type')
+
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json()
+          throw new Error(error.error || 'Error listing conversations')
+        }
+
+        throw new Error(`Error ${response.status}: ${response.statusText}`)
       }
 
       const result = await response.json()
@@ -208,8 +339,14 @@ class RAGService {
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Error deleting conversation')
+        const contentType = response.headers.get('content-type')
+
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json()
+          throw new Error(error.error || 'Error deleting conversation')
+        }
+
+        throw new Error(`Error ${response.status}: ${response.statusText}`)
       }
 
       // Si es la conversación actual, resetearla

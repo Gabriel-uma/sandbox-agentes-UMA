@@ -1,32 +1,7 @@
 import { Button } from "@/components/ui/button"
 import { MoreHorizontal, Plus } from "lucide-react"
 
-const projects = [
-  {
-    title: "Learning From 100 Years o...",
-    subtitle: "For athletes, high altitude pose...",
-  },
-  {
-    title: "Research officiants",
-    subtitle: "Maxwell's equations—the four...",
-  },
-  {
-    title: "What does a senior lead de...",
-    subtitle: "Physiological implications involv...",
-  },
-  {
-    title: "Write a sweet note to your...",
-    subtitle: "In the eighteenth century the G...",
-  },
-  {
-    title: "Meet with cake bakers",
-    subtitle: "Physical space is often conceiv...",
-  },
-  {
-    title: "Meet with cake bakers",
-    subtitle: "Physical space is often conceiv...",
-  },
-]
+const projects: Array<{ title: string; subtitle: string }> = []
 
 export function ProjectsPanel() {
   return (
@@ -34,7 +9,7 @@ export function ProjectsPanel() {
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-medium text-popover-foreground">Projects (7)</h2>
+          <h2 className="font-medium text-popover-foreground">Projects ({projects.length})</h2>
           <Button variant="ghost" size="sm" className="w-8 h-8 p-0">
             <MoreHorizontal className="w-4 h-4" />
           </Button>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { ragService, type Document } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -18,7 +19,8 @@ import {
   Activity,
   Zap,
   HardDrive,
-  Users
+  Users,
+  Loader2
 } from "lucide-react"
 
 interface IndexedDocument {
@@ -45,87 +47,84 @@ interface KnowledgeBaseStats {
 }
 
 export function KnowledgeBaseSection() {
-  const [indexedDocs, setIndexedDocs] = useState<IndexedDocument[]>([
-    {
-      id: "idx_1",
-      name: "Lista_Centros_Salud_2024.pdf",
-      size: 2458624,
-      indexedDate: new Date(Date.now() - 86400000),
-      status: 'indexed',
-      chunks: 156,
-      vectorsCount: 156,
-      lastAccessed: new Date(Date.now() - 3600000),
-      queryCount: 24
-    },
-    {
-      id: "idx_2",
-      name: "Manual_Procedimientos.docx",
-      size: 1234567,
-      indexedDate: new Date(Date.now() - 172800000),
-      status: 'indexed',
-      chunks: 89,
-      vectorsCount: 89,
-      lastAccessed: new Date(Date.now() - 7200000),
-      queryCount: 12
-    },
-    {
-      id: "idx_3",
-      name: "Reporte_Estadisticas.txt",
-      size: 524288,
-      indexedDate: new Date(Date.now() - 1800000),
-      status: 'indexing',
-      chunks: 0,
-      vectorsCount: 0,
-      queryCount: 0
-    },
-    {
-      id: "idx_4",
-      name: "Documento_Pendiente.pdf",
-      size: 1024000,
-      indexedDate: new Date(),
-      status: 'queued',
-      chunks: 0,
-      vectorsCount: 0,
-      queryCount: 0
-    }
-  ])
-
+  const [indexedDocs, setIndexedDocs] = useState<IndexedDocument[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [stats, setStats] = useState<KnowledgeBaseStats>({
-    totalDocuments: 4,
-    indexedDocuments: 2,
-    totalChunks: 245,
-    totalVectors: 245,
-    indexSize: "152 MB",
-    lastUpdate: new Date(Date.now() - 1800000),
-    queryCount: 36,
-    avgResponseTime: 1.2
+    totalDocuments: 0,
+    indexedDocuments: 0,
+    totalChunks: 0,
+    totalVectors: 0,
+    indexSize: "0 MB",
+    lastUpdate: new Date(),
+    queryCount: 0,
+    avgResponseTime: 0
   })
+
+  useEffect(() => {
+    loadDocuments()
+  }, [])
+
+  const loadDocuments = async () => {
+    setIsLoading(true)
+    try {
+      const docs = await ragService.fetchDocuments()
+      const chatHistory = ragService.getChatHistory()
+
+      // Calculate query counts from chat history
+      const sourceDocCounts = new Map<string, number>()
+      chatHistory.forEach(msg => {
+        if (msg.sources) {
+          msg.sources.forEach(source => {
+            sourceDocCounts.set(source, (sourceDocCounts.get(source) || 0) + 1)
+          })
+        }
+      })
+
+      // Convert Document[] to IndexedDocument[]
+      const indexed: IndexedDocument[] = docs.map(doc => ({
+        id: doc.id,
+        name: doc.name,
+        size: doc.size || 0,
+        indexedDate: doc.uploadedAt || new Date(),
+        status: doc.status === 'ready' ? 'indexed' : doc.status === 'processing' ? 'indexing' : doc.status === 'uploading' ? 'queued' : 'failed',
+        chunks: doc.totalChunks || 0,
+        vectorsCount: doc.totalChunks || 0,
+        lastAccessed: undefined,
+        queryCount: sourceDocCounts.get(doc.name) || 0
+      }))
+
+      setIndexedDocs(indexed)
+
+      // Calculate stats
+      const totalDocs = indexed.length
+      const indexedCount = indexed.filter(d => d.status === 'indexed').length
+      const totalChunks = indexed.reduce((sum, doc) => sum + doc.chunks, 0)
+      const totalVectors = indexed.reduce((sum, doc) => sum + doc.vectorsCount, 0)
+      const totalSize = indexed.reduce((sum, doc) => sum + doc.size, 0)
+      const totalQueries = chatHistory.filter(msg => msg.type === 'user').length
+
+      setStats({
+        totalDocuments: totalDocs,
+        indexedDocuments: indexedCount,
+        totalChunks: totalChunks,
+        totalVectors: totalVectors,
+        indexSize: formatFileSize(totalSize),
+        lastUpdate: new Date(),
+        queryCount: totalQueries,
+        avgResponseTime: 0
+      })
+    } catch (error) {
+      console.error("Error loading documents:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const refreshKnowledgeBase = async () => {
     setIsRefreshing(true)
-
-    // Simulate API call to refresh status
-    await new Promise(resolve => setTimeout(resolve, 2000))
-
-    // Update stats
-    setStats(prev => ({
-      ...prev,
-      lastUpdate: new Date()
-    }))
-
-    // Simulate document status updates
-    setIndexedDocs(prev => prev.map(doc => {
-      if (doc.status === 'indexing') {
-        return { ...doc, status: 'indexed', chunks: 67, vectorsCount: 67 }
-      }
-      if (doc.status === 'queued') {
-        return { ...doc, status: 'indexing' }
-      }
-      return doc
-    }))
-
+    await loadDocuments()
     setIsRefreshing(false)
   }
 
@@ -318,6 +317,23 @@ export function KnowledgeBaseSection() {
               <CardTitle>Documentos en el Índice</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
+              {isLoading ? (
+                <div className="h-96 flex items-center justify-center">
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Cargando documentos indexados...</p>
+                  </div>
+                </div>
+              ) : filteredDocs.length === 0 ? (
+                <div className="h-96 flex items-center justify-center">
+                  <div className="text-center p-6">
+                    <Database className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                    <p className="text-sm text-muted-foreground">
+                      {searchTerm ? "No se encontraron documentos con ese nombre" : "No hay documentos indexados todavía"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <ScrollArea className="h-96">
                 <div className="space-y-1">
                   {filteredDocs.map((doc) => (
@@ -367,6 +383,7 @@ export function KnowledgeBaseSection() {
                   ))}
                 </div>
               </ScrollArea>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -379,9 +396,9 @@ export function KnowledgeBaseSection() {
                 <div className="flex items-center gap-3">
                   <Activity className="w-8 h-8 text-green-600" />
                   <div>
-                    <p className="text-sm text-muted-foreground">Consultas Hoy</p>
-                    <p className="text-2xl font-semibold">127</p>
-                    <p className="text-xs text-green-600">+12% vs ayer</p>
+                    <p className="text-sm text-muted-foreground">Total Consultas</p>
+                    <p className="text-2xl font-semibold">{stats.queryCount}</p>
+                    <p className="text-xs text-green-600">Consultas realizadas</p>
                   </div>
                 </div>
               </CardContent>
@@ -392,9 +409,9 @@ export function KnowledgeBaseSection() {
                 <div className="flex items-center gap-3">
                   <BarChart3 className="w-8 h-8 text-blue-600" />
                   <div>
-                    <p className="text-sm text-muted-foreground">Precisión Promedio</p>
-                    <p className="text-2xl font-semibold">94.2%</p>
-                    <p className="text-xs text-blue-600">Excelente</p>
+                    <p className="text-sm text-muted-foreground">Documentos Activos</p>
+                    <p className="text-2xl font-semibold">{stats.indexedDocuments}</p>
+                    <p className="text-xs text-blue-600">Listos para consulta</p>
                   </div>
                 </div>
               </CardContent>
@@ -405,9 +422,9 @@ export function KnowledgeBaseSection() {
                 <div className="flex items-center gap-3">
                   <Users className="w-8 h-8 text-purple-600" />
                   <div>
-                    <p className="text-sm text-muted-foreground">Usuarios Activos</p>
-                    <p className="text-2xl font-semibold">23</p>
-                    <p className="text-xs text-purple-600">En línea ahora</p>
+                    <p className="text-sm text-muted-foreground">Fragmentos Indexados</p>
+                    <p className="text-2xl font-semibold">{stats.totalChunks.toLocaleString()}</p>
+                    <p className="text-xs text-purple-600">Chunks procesados</p>
                   </div>
                 </div>
               </CardContent>
@@ -448,15 +465,17 @@ export function KnowledgeBaseSection() {
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
                         <span className="text-sm">Salud general</span>
-                        <Badge variant="default">Excelente</Badge>
+                        <Badge variant={stats.indexedDocuments === stats.totalDocuments ? "default" : "secondary"}>
+                          {stats.indexedDocuments === stats.totalDocuments ? "Excelente" : "Procesando"}
+                        </Badge>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Latencia de consulta</span>
-                        <span className="text-sm font-medium text-green-600">1.2s promedio</span>
+                        <span className="text-sm">Total documentos</span>
+                        <span className="text-sm font-medium text-blue-600">{stats.totalDocuments} documentos</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Disponibilidad</span>
-                        <span className="text-sm font-medium text-green-600">99.8%</span>
+                        <span className="text-sm">Tamaño del índice</span>
+                        <span className="text-sm font-medium text-green-600">{stats.indexSize}</span>
                       </div>
                     </div>
                   </div>

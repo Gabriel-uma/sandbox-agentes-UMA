@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { ragService } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -17,7 +18,8 @@ import {
   Filter,
   Bot,
   User,
-  FileText
+  FileText,
+  Loader2
 } from "lucide-react"
 
 interface ChatMessage {
@@ -43,95 +45,66 @@ export function ChatHistorySection() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedSession, setSelectedSession] = useState<ChatSession | null>(null)
   const [filterDate, setFilterDate] = useState("")
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
+  const [isLoading, setIsLoading] = useState(true)
 
-  // Mock chat sessions
-  const [chatSessions] = useState<ChatSession[]>([
-    {
-      id: "session_1",
-      title: "Consulta sobre centros de salud",
-      startTime: new Date(Date.now() - 86400000),
-      endTime: new Date(Date.now() - 86400000 + 1800000),
-      messageCount: 12,
-      duration: 30,
-      topics: ["centros de salud", "ubicaciones", "servicios"],
-      messages: [
-        {
-          id: "msg_1",
-          type: 'user',
-          content: "¿Cuántos centros de salud hay en la región metropolitana?",
-          timestamp: new Date(Date.now() - 86400000)
-        },
-        {
-          id: "msg_2",
-          type: 'assistant',
-          content: "Según los documentos analizados, en la región metropolitana hay un total de 45 centros de salud distribuidos en diferentes comunas.",
-          timestamp: new Date(Date.now() - 86400000 + 120000),
-          sources: ["Lista_Centros_Salud_2024.pdf"]
-        },
-        {
-          id: "msg_3",
-          type: 'user',
-          content: "¿Cuáles son los que atienden 24 horas?",
-          timestamp: new Date(Date.now() - 86400000 + 300000)
-        },
-        {
-          id: "msg_4",
-          type: 'assistant',
-          content: "De acuerdo a la información disponible, 8 centros de salud ofrecen atención 24 horas: Centro de Salud Las Condes, Hospital Clínico...",
-          timestamp: new Date(Date.now() - 86400000 + 420000),
-          sources: ["Lista_Centros_Salud_2024.pdf", "Manual_Procedimientos.docx"]
+  useEffect(() => {
+    loadChatHistory()
+  }, [])
+
+  const loadChatHistory = () => {
+    setIsLoading(true)
+    try {
+      const history = ragService.getChatHistory()
+
+      // Convert chat history to ChatSession format
+      const sessions: ChatSession[] = history.map(msg => {
+        const messages: ChatMessage[] = [{
+          id: msg.id,
+          type: msg.type,
+          content: msg.content,
+          timestamp: msg.timestamp,
+          sources: msg.sources
+        }]
+
+        return {
+          id: msg.sessionId || msg.id,
+          title: msg.content.substring(0, 50) + (msg.content.length > 50 ? '...' : ''),
+          startTime: msg.timestamp,
+          endTime: msg.timestamp,
+          messageCount: 1,
+          duration: 0,
+          messages: messages,
+          topics: msg.sources || []
         }
-      ]
-    },
-    {
-      id: "session_2",
-      title: "Análisis de procedimientos médicos",
-      startTime: new Date(Date.now() - 172800000),
-      endTime: new Date(Date.now() - 172800000 + 2400000),
-      messageCount: 8,
-      duration: 40,
-      topics: ["procedimientos", "protocolos", "medicina"],
-      messages: [
-        {
-          id: "msg_5",
-          type: 'user',
-          content: "¿Cuál es el protocolo para emergencias cardíacas?",
-          timestamp: new Date(Date.now() - 172800000)
-        },
-        {
-          id: "msg_6",
-          type: 'assistant',
-          content: "El protocolo para emergencias cardíacas incluye los siguientes pasos según el manual de procedimientos...",
-          timestamp: new Date(Date.now() - 172800000 + 180000),
-          sources: ["Manual_Procedimientos.docx"]
+      })
+
+      // Group messages by sessionId
+      const groupedSessions = new Map<string, ChatSession>()
+
+      sessions.forEach(session => {
+        const sessionId = session.id
+        if (groupedSessions.has(sessionId)) {
+          const existing = groupedSessions.get(sessionId)!
+          existing.messages.push(...session.messages)
+          existing.messageCount = existing.messages.length
+          existing.endTime = session.endTime
+          const durationMs = existing.endTime.getTime() - existing.startTime.getTime()
+          existing.duration = Math.floor(durationMs / 60000) // Convert to minutes
+        } else {
+          groupedSessions.set(sessionId, session)
         }
-      ]
-    },
-    {
-      id: "session_3",
-      title: "Estadísticas y reportes",
-      startTime: new Date(Date.now() - 259200000),
-      endTime: new Date(Date.now() - 259200000 + 900000),
-      messageCount: 6,
-      duration: 15,
-      topics: ["estadísticas", "reportes", "datos"],
-      messages: [
-        {
-          id: "msg_7",
-          type: 'user',
-          content: "¿Cuáles son las estadísticas de atención del último trimestre?",
-          timestamp: new Date(Date.now() - 259200000)
-        },
-        {
-          id: "msg_8",
-          type: 'assistant',
-          content: "Según el reporte de estadísticas, en el último trimestre se atendieron 12,450 pacientes...",
-          timestamp: new Date(Date.now() - 259200000 + 150000),
-          sources: ["Reporte_Estadisticas.txt"]
-        }
-      ]
+      })
+
+      setChatSessions(Array.from(groupedSessions.values()).sort((a, b) =>
+        b.startTime.getTime() - a.startTime.getTime()
+      ))
+    } catch (error) {
+      console.error("Error loading chat history:", error)
+    } finally {
+      setIsLoading(false)
     }
-  ])
+  }
 
   const filteredSessions = chatSessions.filter(session => {
     const matchesSearch = session.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -163,13 +136,12 @@ export function ChatHistorySection() {
   }
 
   const deleteSession = (sessionId: string) => {
-    // In real implementation, this would call the backend
-    console.log(`Deleting session ${sessionId}`)
+    setChatSessions(prev => prev.filter(session => session.id !== sessionId))
   }
 
   const clearAllHistory = () => {
-    // In real implementation, this would call the backend
-    console.log("Clearing all chat history")
+    ragService.clearChatHistory()
+    setChatSessions([])
   }
 
   const formatDuration = (minutes: number) => {
@@ -241,6 +213,23 @@ export function ChatHistorySection() {
           </div>
 
           {/* Sessions List */}
+          {isLoading ? (
+            <div className="h-96 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Cargando historial de chat...</p>
+              </div>
+            </div>
+          ) : filteredSessions.length === 0 ? (
+            <div className="h-96 flex items-center justify-center">
+              <div className="text-center p-6">
+                <MessageSquare className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">
+                  {searchTerm || filterDate ? "No se encontraron conversaciones con los filtros aplicados" : "No hay conversaciones guardadas todavía"}
+                </p>
+              </div>
+            </div>
+          ) : (
           <ScrollArea className="h-96">
             <div className="grid grid-cols-1 gap-4">
               {filteredSessions.map((session) => (
@@ -367,6 +356,7 @@ export function ChatHistorySection() {
               ))}
             </div>
           </ScrollArea>
+          )}
         </TabsContent>
 
         <TabsContent value="search" className="space-y-4">

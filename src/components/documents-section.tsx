@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react"
-import { ragService } from "@/lib/rag-service"
+
+import { useState, useCallback, useEffect } from "react"
+import { ragService, Document, DocumentStatus } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -7,59 +8,88 @@ import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Input } from "@/components/ui/input"
-import { Upload, FileText, X, CheckCircle, AlertCircle, Search, Trash2, Download, FileUp, HardDrive } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  Upload,
+  FileText,
+  X,
+  CheckCircle,
+  AlertCircle,
+  Search,
+  Trash2,
+  Download,
+  FileUp,
+  HardDrive,
+  Loader2,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 
-interface UploadedDocument {
-  id: string
-  name: string
-  size: number
-  uploadDate: Date
-  status: 'uploading' | 'processing' | 'ready' | 'error'
-  progress: number
-  type: string
-  pages?: number
+interface UploadedDocument extends Document {
+  progress?: number
   indexed: boolean
 }
 
+const ICON_CLASS = "w-6 h-6 text-muted-foreground"
+
 export function DocumentsSection() {
   const [dragActive, setDragActive] = useState(false)
-  const [documents, setDocuments] = useState<UploadedDocument[]>([
-    {
-      id: "doc_1",
-      name: "Lista_Centros_Salud_2024.pdf",
-      size: 2458624,
-      uploadDate: new Date(Date.now() - 86400000),
-      status: 'ready',
-      progress: 100,
-      type: 'application/pdf',
-      pages: 45,
-      indexed: true
-    },
-    {
-      id: "doc_2",
-      name: "Manual_Procedimientos.docx",
-      size: 1234567,
-      uploadDate: new Date(Date.now() - 172800000),
-      status: 'ready',
-      progress: 100,
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      pages: 128,
-      indexed: true
-    },
-    {
-      id: "doc_3",
-      name: "Reporte_Estadisticas.txt",
-      size: 524288,
-      uploadDate: new Date(Date.now() - 259200000),
-      status: 'processing',
-      progress: 75,
-      type: 'text/plain',
-      indexed: false
-    }
-  ])
+  const [documents, setDocuments] = useState<UploadedDocument[]>([])
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([])
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [documentToDelete, setDocumentToDelete] = useState<{ id: string; name: string } | null>(null)
+  const [deleteMultipleDialogOpen, setDeleteMultipleDialogOpen] = useState(false)
+
+  const toUploadedDocument = useCallback(
+    (document: Document, extras: Partial<UploadedDocument> = {}): UploadedDocument => {
+      const baseProgress: Record<DocumentStatus, number> = {
+        uploading: 30,
+        processing: 60,
+        ready: 100,
+        error: 0,
+      }
+
+      const merged = {
+        ...document,
+        progress: extras.progress ?? baseProgress[document.status ?? "ready"],
+        indexed: extras.indexed ?? Boolean((document.totalChunks ?? 0) > 0),
+      }
+
+      return { ...merged, ...extras }
+    },
+    []
+  )
+
+  const loadDocuments = useCallback(async () => {
+    try {
+      const docs = await ragService.fetchDocuments()
+      console.log("Fetched documents:", docs)
+      setDocuments(docs.map((doc) => toUploadedDocument(doc)))
+      setHasLoaded(true)
+      setSelectedDocuments([])
+    } catch (error) {
+      console.error("Error fetching documents:", error)
+      const message = error instanceof Error ? error.message : "Error al obtener los documentos"
+      setUploadError(message)
+      setHasLoaded(true)
+      setDocuments([])
+    }
+  }, [toUploadedDocument])
+
+  useEffect(() => {
+    void loadDocuments()
+  }, [loadDocuments])
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -77,121 +107,199 @@ export function DocumentsSection() {
     setDragActive(false)
 
     const droppedFiles = Array.from(e.dataTransfer.files)
-    handleFiles(droppedFiles)
+    void handleFiles(droppedFiles)
   }, [])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const selectedFiles = Array.from(e.target.files)
-      handleFiles(selectedFiles)
+      void handleFiles(selectedFiles)
     }
   }
 
-  const handleFiles = (fileList: File[]) => {
-    const newDocs = fileList.map(file => ({
-      id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  const handleFiles = async (fileList: File[]) => {
+    setUploadError(null)
+
+    for (const file of fileList) {
+      if (file.size > 50 * 1024 * 1024) {
+        setUploadError(`${file.name} excede el tamaño máximo de 50MB`)
+        continue
+      }
+
+      await uploadDocumentToService(file)
+    }
+  }
+
+  const uploadDocumentToService = async (file: File) => {
+    const provisionalId = `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+    const provisionalDocument: UploadedDocument = {
+      id: provisionalId,
       name: file.name,
       size: file.size,
-      uploadDate: new Date(),
-      status: 'uploading' as const,
+      uploadedAt: new Date(),
+      status: "uploading",
+      type: file.type || "application/octet-stream",
+      indexed: false,
       progress: 0,
-      type: file.type,
-      pages: Math.floor(Math.random() * 100) + 1,
-      indexed: false
-    }))
-
-    setDocuments(prev => [...newDocs, ...prev])
-
-    // Simulate upload and processing
-    newDocs.forEach(doc => {
-      simulateDocumentProcessing(doc.id)
-    })
-  }
-
-  const simulateDocumentProcessing = async (docId: string) => {
-    // Simulate upload progress
-    for (let progress = 0; progress <= 100; progress += 10) {
-      await new Promise(resolve => setTimeout(resolve, 300))
-      setDocuments(prev => prev.map(doc =>
-        doc.id === docId ? { ...doc, progress } : doc
-      ))
     }
 
-    // Change to processing
-    setDocuments(prev => prev.map(doc =>
-      doc.id === docId ? { ...doc, status: 'processing', progress: 0 } : doc
-    ))
+    setDocuments((prev) => [provisionalDocument, ...prev])
 
-    // Simulate processing
-    for (let progress = 0; progress <= 100; progress += 20) {
-      await new Promise(resolve => setTimeout(resolve, 500))
-      setDocuments(prev => prev.map(doc =>
-        doc.id === docId ? { ...doc, progress } : doc
-      ))
+    try {
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === provisionalId
+            ? { ...doc, status: "uploading", progress: 30 }
+            : doc
+        )
+      )
+
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === provisionalId
+            ? { ...doc, status: "processing", progress: 60 }
+            : doc
+        )
+      )
+
+      const backendDocument = await ragService.uploadDocument(file)
+
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === provisionalId
+            ? toUploadedDocument(backendDocument, {
+                status: backendDocument.status,
+                progress: 100,
+                indexed: true,
+              })
+            : doc
+        )
+      )
+
+      setSelectedDocuments((prev) =>
+        prev.map((id) => (id === provisionalId ? backendDocument.id : id))
+      )
+
+      setUploadError(null)
+      setHasLoaded(true)
+    } catch (error) {
+      console.error("Error uploading document:", error)
+      const message = error instanceof Error ? error.message : "Error desconocido al subir el archivo"
+      setUploadError(message)
+
+      setDocuments((prev) => prev.filter((doc) => doc.id !== provisionalId))
     }
-
-    // Complete processing
-    setDocuments(prev => prev.map(doc =>
-      doc.id === docId ? { ...doc, status: 'ready', progress: 100, indexed: true } : doc
-    ))
   }
 
-  const deleteDocument = (docId: string) => {
-    setDocuments(prev => prev.filter(doc => doc.id !== docId))
-    setSelectedDocuments(prev => prev.filter(id => id !== docId))
+  const canInteract = hasLoaded
+
+  const openDeleteDialog = (docId: string, docName: string) => {
+    setDocumentToDelete({ id: docId, name: docName })
+    setDeleteDialogOpen(true)
+  }
+
+  const confirmDeleteDocument = async () => {
+    if (!canInteract || !documentToDelete) return
+
+    try {
+      console.log("Deleting document with ID:", documentToDelete.id)
+      await ragService.deleteDocument(documentToDelete.id)
+      setDocuments((prev) => prev.filter((doc) => doc.id !== documentToDelete.id))
+      setSelectedDocuments((prev) => prev.filter((id) => id !== documentToDelete.id))
+      setDeleteDialogOpen(false)
+      setDocumentToDelete(null)
+    } catch (error) {
+      console.error("Error deleting document:", error)
+      const message = error instanceof Error ? error.message : "Error al eliminar el documento"
+      setUploadError(message)
+      setDeleteDialogOpen(false)
+      setDocumentToDelete(null)
+    }
   }
 
   const toggleDocumentSelection = (docId: string) => {
-    setSelectedDocuments(prev =>
-      prev.includes(docId)
-        ? prev.filter(id => id !== docId)
-        : [...prev, docId]
+    if (!canInteract) return
+
+    setSelectedDocuments((prev) =>
+      prev.includes(docId) ? prev.filter((id) => id !== docId) : [...prev, docId]
     )
   }
 
-  const deleteSelectedDocuments = () => {
-    setDocuments(prev => prev.filter(doc => !selectedDocuments.includes(doc.id)))
-    setSelectedDocuments([])
+  const openDeleteMultipleDialog = () => {
+    setDeleteMultipleDialogOpen(true)
   }
 
-  const downloadDocument = (doc: UploadedDocument) => {
-    // Mock download functionality
-    const blob = new Blob([`Contenido del documento: ${doc.name}`], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = doc.name
-    a.click()
-    URL.revokeObjectURL(url)
+  const confirmDeleteSelectedDocuments = async () => {
+    if (!canInteract) return
+
+    try {
+      await Promise.all(selectedDocuments.map((id) => ragService.deleteDocument(id)))
+      setDocuments((prev) => prev.filter((doc) => !selectedDocuments.includes(doc.id)))
+      setSelectedDocuments([])
+      setDeleteMultipleDialogOpen(false)
+    } catch (error) {
+      console.error("Error deleting selected documents:", error)
+      const message = error instanceof Error ? error.message : "Error al eliminar documentos"
+      setUploadError(message)
+      setDeleteMultipleDialogOpen(false)
+    }
+  }
+
+  const downloadDocument = async (doc: UploadedDocument) => {
+    if (!canInteract) return
+
+    try {
+      const { blob, filename } = await ragService.downloadDocument(doc.id)
+      const anchor = document.createElement("a")
+      const url = URL.createObjectURL(blob)
+      anchor.href = url
+      anchor.download = filename || doc.name
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error("Error downloading document:", error)
+      const message = error instanceof Error ? error.message : "No se pudo descargar el documento"
+      setUploadError(message)
+    }
   }
 
   const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes'
+    if (!bytes) return "0 Bytes"
     const k = 1024
-    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const sizes = ["Bytes", "KB", "MB", "GB"]
     const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
   }
 
   const getFileIcon = (type: string) => {
-    if (type.includes('pdf')) return '📄'
-    if (type.includes('word') || type.includes('document')) return '📝'
-    if (type.includes('text')) return '📋'
-    if (type.includes('excel') || type.includes('spreadsheet')) return '📊'
-    return '📁'
+    const normalizedType = type?.toLowerCase() ?? ""
+
+    if (normalizedType.includes("pdf")) {
+      return <FileText className={`${ICON_CLASS} text-red-500`} />
+    }
+
+    if (normalizedType.includes("word") || normalizedType.includes("doc")) {
+      return <FileUp className={`${ICON_CLASS} text-blue-500`} />
+    }
+
+    if (normalizedType.includes("sheet") || normalizedType.includes("excel")) {
+      return <HardDrive className={`${ICON_CLASS} text-green-500`} />
+    }
+
+    return <FileText className={ICON_CLASS} />
   }
 
-  const filteredDocuments = documents.filter(doc =>
+  const filteredDocuments = documents.filter((doc) =>
     doc.name.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const totalSize = documents.reduce((acc, doc) => acc + doc.size, 0)
-  const readyDocuments = documents.filter(doc => doc.status === 'ready').length
-  const processingDocuments = documents.filter(doc => doc.status === 'processing' || doc.status === 'uploading').length
+  const totalSize = documents.reduce((acc, doc) => acc + (doc.size ?? 0), 0)
+  const readyDocuments = documents.filter((doc) => doc.status === "ready").length
+  const processingDocuments = documents.filter((doc) => doc.status === "processing" || doc.status === "uploading").length
 
   return (
     <div className="h-full flex flex-col p-6 overflow-hidden">
-      {/* Header */}
       <div className="mb-6 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -200,109 +308,125 @@ export function DocumentsSection() {
               Gestiona los documentos de tu base de conocimiento
             </p>
           </div>
-          {selectedDocuments.length > 0 && (
-            <Button variant="destructive" size="sm" onClick={deleteSelectedDocuments}>
+          {hasLoaded && selectedDocuments.length > 0 && (
+            <Button variant="destructive" size="sm" onClick={openDeleteMultipleDialog}>
               <Trash2 className="w-4 h-4 mr-2" />
               Eliminar Seleccionados ({selectedDocuments.length})
             </Button>
           )}
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <Card>
+        {uploadError && (
+          <Card className="mb-4 border-red-200 bg-red-50">
             <CardContent className="p-4">
               <div className="flex items-center gap-3">
-                <FileText className="w-8 h-8 text-blue-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Documentos</p>
-                  <p className="text-2xl font-semibold">{documents.length}</p>
+                <AlertCircle className="w-5 h-5 text-red-600" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-red-900">Error al subir/eliminar documento</p>
+                  <p className="text-sm text-red-700">{uploadError}</p>
                 </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setUploadError(null)}
+                  className="w-8 h-8 p-0"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Total Documentos</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-bold text-foreground">{documents.length}</p>
+              <p className="text-xs text-muted-foreground">Documentos registrados en el sistema</p>
             </CardContent>
           </Card>
 
           <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <CheckCircle className="w-8 h-8 text-green-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Listos</p>
-                  <p className="text-2xl font-semibold">{readyDocuments}</p>
-                </div>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Listos</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 text-green-600">
+                <CheckCircle className="w-5 h-5" />
+                <p className="text-2xl font-bold">{readyDocuments}</p>
               </div>
+              <p className="text-xs text-muted-foreground">Documentos disponibles para búsqueda</p>
             </CardContent>
           </Card>
 
           <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <Upload className="w-8 h-8 text-orange-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Procesando</p>
-                  <p className="text-2xl font-semibold">{processingDocuments}</p>
-                </div>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Procesando</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 text-amber-600">
+                <Upload className="w-4 h-4" />
+                <p className="text-2xl font-bold">{processingDocuments}</p>
               </div>
+              <p className="text-xs text-muted-foreground">En cola de embeddings e indexación</p>
             </CardContent>
           </Card>
 
           <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <HardDrive className="w-8 h-8 text-purple-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Tamaño Total</p>
-                  <p className="text-2xl font-semibold">{formatFileSize(totalSize)}</p>
-                </div>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Tamaño total</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 text-primary">
+                <HardDrive className="w-4 h-4" />
+                <p className="text-2xl font-bold">{formatFileSize(totalSize)}</p>
               </div>
+              <p className="text-xs text-muted-foreground">Uso acumulado de almacenamiento</p>
             </CardContent>
           </Card>
         </div>
       </div>
 
-      <div className="flex gap-6 flex-1 min-h-0 overflow-hidden">
-        {/* Upload Area */}
-        <div className="w-1/3 overflow-y-auto">
-          {/* Upload Card */}
+      <Separator className="my-4" />
+
+      <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6">
+        <div className="space-y-6 overflow-y-auto pr-2">
           <Card
             className={cn(
-              "border-2 border-dashed transition-colors cursor-pointer mb-4",
-              dragActive ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
+              "border-dashed border-2 flex flex-col items-center justify-center min-h-[260px] p-6 text-center",
+              dragActive ? "border-primary bg-primary/5" : "border-border"
             )}
             onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
             onDragOver={handleDrag}
+            onDragLeave={handleDrag}
             onDrop={handleDrop}
           >
-            <CardContent className="p-6 text-center">
-              <div className="mb-4">
-                <FileUp className="w-12 h-12 text-muted-foreground mx-auto" />
-              </div>
-              <div className="mb-4">
-                <p className="text-sm font-medium text-foreground mb-1">
-                  Arrastra archivos aquí o haz clic para explorar
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Soporta PDF, DOC, DOCX, TXT y otros formatos
-                </p>
-              </div>
-              <input
-                type="file"
-                multiple
-                accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx"
-                onChange={handleFileSelect}
-                className="hidden"
-                id="file-upload"
-              />
-              <label htmlFor="file-upload">
-                <Button variant="outline" className="cursor-pointer">
-                  Seleccionar Archivos
-                </Button>
+            <Upload className="w-12 h-12 text-primary mb-4" />
+            <h3 className="text-lg font-semibold text-foreground">Sube tus documentos</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Arrastra y suelta archivos o selecciona desde tu computadora. Se procesarán automáticamente.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <label className="relative inline-flex items-center justify-center px-6 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md cursor-pointer hover:bg-primary/90">
+                <FileUp className="w-4 h-4 mr-2" />
+                Seleccionar archivos
+                <input
+                  type="file"
+                  multiple
+                  onChange={handleFileSelect}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  accept=".pdf,.txt,.docx"
+                />
               </label>
-            </CardContent>
+              <Button variant="outline" size="sm" onClick={() => void loadDocuments()}>
+                Refrescar lista
+              </Button>
+            </div>
           </Card>
 
-          {/* Upload Instructions */}
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">Instrucciones de Carga</CardTitle>
@@ -318,9 +442,7 @@ export function DocumentsSection() {
           </Card>
         </div>
 
-        {/* Documents List */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          {/* Search */}
           <div className="mb-4 flex-shrink-0">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -333,12 +455,28 @@ export function DocumentsSection() {
             </div>
           </div>
 
-          {/* Documents Table */}
           <Card className="flex-1 flex flex-col overflow-hidden">
             <CardHeader>
               <CardTitle className="text-lg">Lista de Documentos</CardTitle>
             </CardHeader>
             <CardContent className="p-0 flex-1 overflow-hidden">
+              {!hasLoaded ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Cargando documentos...</p>
+                  </div>
+                </div>
+              ) : filteredDocuments.length === 0 ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center p-6">
+                    <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                    <p className="text-sm text-muted-foreground">
+                      {searchTerm ? "No se encontraron documentos con ese nombre" : "No hay documentos cargados todavía"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <ScrollArea className="h-full">
                 <div className="space-y-1">
                   {filteredDocuments.map((doc) => (
@@ -346,18 +484,19 @@ export function DocumentsSection() {
                       key={doc.id}
                       className={cn(
                         "flex items-center gap-4 p-4 hover:bg-muted transition-colors border-b border-border",
-                        selectedDocuments.includes(doc.id) && "bg-muted"
+                        hasLoaded && selectedDocuments.includes(doc.id) && "bg-muted"
                       )}
                     >
                       <input
                         type="checkbox"
-                        checked={selectedDocuments.includes(doc.id)}
+                        checked={hasLoaded && selectedDocuments.includes(doc.id)}
                         onChange={() => toggleDocumentSelection(doc.id)}
                         className="w-4 h-4"
+                        disabled={!canInteract}
                       />
 
-                      <div className="text-2xl">
-                        {getFileIcon(doc.type)}
+                      <div className="flex items-center justify-center w-10 h-10 rounded-md bg-muted/50">
+                        {getFileIcon(doc.mimeType || doc.type)}
                       </div>
 
                       <div className="flex-1 min-w-0">
@@ -371,46 +510,54 @@ export function DocumentsSection() {
                                 Indexado
                               </Badge>
                             )}
-                            <Badge variant={
-                              doc.status === 'ready' ? 'default' :
-                              doc.status === 'processing' ? 'secondary' :
-                              doc.status === 'uploading' ? 'secondary' : 'destructive'
-                            }>
-                              {doc.status === 'uploading' ? 'Subiendo' :
-                               doc.status === 'processing' ? 'Procesando' :
-                               doc.status === 'ready' ? 'Listo' : 'Error'}
+                            <Badge
+                              variant={
+                                doc.status === 'ready'
+                                  ? 'default'
+                                  : doc.status === 'error'
+                                  ? 'destructive'
+                                  : 'secondary'
+                              }
+                            >
+                              {doc.status === 'uploading'
+                                ? 'Subiendo'
+                                : doc.status === 'processing'
+                                ? 'Procesando'
+                                : doc.status === 'ready'
+                                ? 'Listo'
+                                : 'Error'}
                             </Badge>
                           </div>
                         </div>
 
                         <div className="flex items-center justify-between text-xs text-muted-foreground">
                           <span>
-                            {formatFileSize(doc.size)} • {doc.uploadDate.toLocaleDateString()}
-                            {doc.pages && ` • ${doc.pages} páginas`}
+                            {formatFileSize(doc.size)} � {doc.uploadedAt.toLocaleDateString()}
+                            {doc.totalChunks ? ` � ${doc.totalChunks} chunks` : ''}
                           </span>
                         </div>
 
                         {(doc.status === 'uploading' || doc.status === 'processing') && (
-                          <Progress value={doc.progress} className="mt-2 h-1" />
+                          <Progress value={doc.progress ?? 0} className="mt-2 h-1" />
                         )}
                       </div>
 
                       <div className="flex items-center gap-1">
-                        {doc.status === 'ready' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-8 h-8 p-0"
-                            onClick={() => downloadDocument(doc)}
-                          >
-                            <Download className="w-4 h-4" />
-                          </Button>
-                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-8 h-8 p-0"
+                          onClick={() => void downloadDocument(doc)}
+                          disabled={!canInteract || doc.status !== 'ready'}
+                        >
+                          <Download className="w-4 h-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           className="w-8 h-8 p-0 text-red-600"
-                          onClick={() => deleteDocument(doc.id)}
+                          onClick={() => openDeleteDialog(doc.id, doc.name)}
+                          disabled={!canInteract}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
@@ -419,10 +566,57 @@ export function DocumentsSection() {
                   ))}
                 </div>
               </ScrollArea>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
+
+      {/* Delete Single Document Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar documento?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estás a punto de eliminar <strong>{documentToDelete?.name}</strong>.
+              Esta acción no se puede deshacer y eliminará permanentemente el documento,
+              sus chunks procesados y sus embeddings del sistema.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmDeleteDocument()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Multiple Documents Dialog */}
+      <AlertDialog open={deleteMultipleDialogOpen} onOpenChange={setDeleteMultipleDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar {selectedDocuments.length} documentos?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estás a punto de eliminar {selectedDocuments.length} documento(s) seleccionado(s).
+              Esta acción no se puede deshacer y eliminará permanentemente todos los documentos,
+              sus chunks procesados y sus embeddings del sistema.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmDeleteSelectedDocuments()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Eliminar todos
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

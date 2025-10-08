@@ -1,4 +1,4 @@
-# Configuración principal de Terraform para RAG Agent en GCP
+﻿# Configuración principal de Terraform para RAG Agent en GCP
 terraform {
   required_version = ">= 1.0"
   required_providers {
@@ -188,7 +188,7 @@ resource "google_vertex_ai_index_endpoint_deployed_index" "rag_deployed_index" {
   provider          = google-beta
   index_endpoint    = google_vertex_ai_index_endpoint.rag_index_endpoint.id
   index             = google_vertex_ai_index.rag_vector_index.id
-  deployed_index_id = "rag-deployed-index"
+  deployed_index_id = "rag_deployed_index"
   display_name      = "RAG Deployed Index"
 
   automatic_resources {
@@ -207,8 +207,14 @@ resource "google_cloud_run_v2_service" "document_processor" {
   template {
     service_account = google_service_account.rag_agent_sa.email
 
+    annotations = {
+      "run.googleapis.com/cpu-throttling" = "true"
+    }
+
     containers {
-      image = "gcr.io/${var.project_id}/document-processor:latest"
+      # TEMPORAL: Usando placeholder hasta construir imagen real
+      # Reemplazar con: gcr.io/${var.project_id}/document-processor:latest
+      image = "gcr.io/${var.project_id}/rag-document-processor:${var.docker_image_tag}"
 
       env {
         name  = "PROJECT_ID"
@@ -231,14 +237,29 @@ resource "google_cloud_run_v2_service" "document_processor" {
       }
 
       env {
+        name  = "INDEX_ID"
+        value = google_vertex_ai_index.rag_vector_index.name
+      }
+
+      env {
         name  = "DEPLOYED_INDEX_ID"
         value = google_vertex_ai_index_endpoint_deployed_index.rag_deployed_index.deployed_index_id
       }
 
+      env {
+        name  = "EMBEDDING_MODEL_NAME"
+        value = "text-embedding-004"
+      }
+
+      env {
+        name  = "EMBEDDING_FALLBACK_MODELS"
+        value = "textembedding-gecko@001"
+      }
+
       resources {
         limits = {
-          cpu    = "2"
-          memory = "4Gi"
+          cpu    = "1"
+          memory = "2Gi"
         }
       }
 
@@ -249,7 +270,7 @@ resource "google_cloud_run_v2_service" "document_processor" {
 
     scaling {
       min_instance_count = 0
-      max_instance_count = 10
+      max_instance_count = 2
     }
   }
 
@@ -268,8 +289,14 @@ resource "google_cloud_run_v2_service" "rag_backend" {
   template {
     service_account = google_service_account.rag_agent_sa.email
 
+    annotations = {
+      "run.googleapis.com/cpu-throttling" = "true"
+    }
+
     containers {
-      image = "gcr.io/${var.project_id}/rag-backend:latest"
+      # TEMPORAL: Usando placeholder hasta construir imagen real
+      # Reemplazar con: gcr.io/${var.project_id}/rag-backend:latest
+      image = "gcr.io/${var.project_id}/rag-agent-backend:${var.docker_image_tag}"
 
       env {
         name  = "PROJECT_ID"
@@ -308,13 +335,13 @@ resource "google_cloud_run_v2_service" "rag_backend" {
 
       env {
         name  = "MODEL_NAME"
-        value = "gemini-1.5-flash"
+        value = "models/gemini-2.5-flash"
       }
 
       resources {
         limits = {
-          cpu    = "2"
-          memory = "4Gi"
+          cpu    = "1"
+          memory = "2Gi"
         }
       }
 
@@ -324,8 +351,8 @@ resource "google_cloud_run_v2_service" "rag_backend" {
     }
 
     scaling {
-      min_instance_count = 1
-      max_instance_count = 10
+      min_instance_count = 0
+      max_instance_count = 2
     }
   }
 
@@ -376,3 +403,8 @@ resource "google_cloud_run_v2_service_iam_member" "rag_backend_public" {
   role   = "roles/run.invoker"
   member = "allUsers"
 }
+
+
+
+
+

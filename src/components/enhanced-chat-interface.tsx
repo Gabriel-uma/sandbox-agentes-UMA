@@ -42,9 +42,10 @@ export function EnhancedChatInterface() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    // Create new session on component mount
-    createNewSession()
-    loadSessions()
+    // Only create a session if there are none
+    if (sessions.length === 0) {
+      createNewSession()
+    }
   }, [])
 
   const scrollToBottom = () => {
@@ -92,25 +93,6 @@ export function EnhancedChatInterface() {
     const savedMessages = sessionMessages[sessionId] || []
     setMessages(savedMessages)
     setCurrentSessionId(sessionId)
-  }
-
-  const loadSessions = () => {
-    // Mock sessions - in production, load from backend
-    const mockSessions: ChatSession[] = [
-      {
-        id: "session_1",
-        name: "Consulta sobre centros de salud",
-        timestamp: new Date(Date.now() - 86400000),
-        messageCount: 8
-      },
-      {
-        id: "session_2",
-        name: "Análisis de documentos médicos",
-        timestamp: new Date(Date.now() - 172800000),
-        messageCount: 12
-      }
-    ]
-    setSessions(prev => [...mockSessions, ...prev])
   }
 
   const handleSendMessage = async () => {
@@ -212,9 +194,9 @@ export function EnhancedChatInterface() {
   }
 
   return (
-    <div className="h-full flex">
+    <div className="flex h-full min-h-0">
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-h-0">
         {/* Chat Header */}
         <div className="p-4 border-b border-border">
           <div className="flex items-center justify-between">
@@ -242,7 +224,7 @@ export function EnhancedChatInterface() {
         </div>
 
         {/* Messages Area */}
-        <ScrollArea className="flex-1 p-6">
+        <ScrollArea className="flex-1 p-6 h-full overflow-y-auto">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center">
               <div className="text-center mb-8">
@@ -374,9 +356,9 @@ export function EnhancedChatInterface() {
       </div>
 
       {/* Session History Sidebar */}
-      <div className="w-80 border-l border-border p-4">
+      <div className="w-80 border-l border-border p-4 flex flex-col min-h-0">
         <h3 className="text-sm font-medium text-foreground mb-3">Sesiones Recientes</h3>
-        <ScrollArea className="h-96">
+        <ScrollArea className="flex-1">
           <div className="space-y-2">
             {sessions.map((session) => (
               <Card

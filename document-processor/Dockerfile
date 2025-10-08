@@ -1,11 +1,6 @@
-FROM python:3.11-slim
+﻿FROM python:3.11-slim
 
 WORKDIR /app
-
-# Instalar dependencias del sistema para extracción de texto
-RUN apt-get update && apt-get install -y \
-    poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copiar requirements e instalar dependencias Python
 COPY requirements.txt .
@@ -22,3 +17,4 @@ EXPOSE $PORT
 
 # Usar gunicorn para producción
 CMD exec gunicorn --bind :$PORT --workers 2 --threads 4 --timeout 300 app:app
+

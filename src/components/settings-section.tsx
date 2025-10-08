@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { ragService } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -9,6 +10,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { useToast } from "@/hooks/use-toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Settings,
   Bot,
@@ -20,7 +32,9 @@ import {
   TestTube,
   Zap,
   Globe,
-  Lock
+  Lock,
+  CheckCircle,
+  XCircle
 } from "lucide-react"
 
 interface AIModelConfig {
@@ -32,9 +46,16 @@ interface AIModelConfig {
 }
 
 export function SettingsSection() {
-  const [settings, setSettings] = useState({
+  const { toast } = useToast()
+  const [backendStatus, setBackendStatus] = useState({
+    documentProcessor: false,
+    ragBackend: false,
+    configured: false
+  })
+
+  const defaultSettings = {
     // AI Model Settings
-    selectedModel: "gpt-4-turbo",
+    selectedModel: "gemini-pro",
     temperature: [0.7],
     maxResponseLength: [2048],
     topP: [0.9],
@@ -61,38 +82,59 @@ export function SettingsSection() {
 
     // Custom Prompt
     systemPrompt: "Eres un asistente experto que ayuda a responder preguntas basándose en documentos. Proporciona respuestas precisas y cita las fuentes relevantes."
-  })
+  }
 
+  const [settings, setSettings] = useState(defaultSettings)
   const [unsavedChanges, setUnsavedChanges] = useState(false)
+  const [testDialogOpen, setTestDialogOpen] = useState(false)
+
+  useEffect(() => {
+    loadSettings()
+    checkBackendStatus()
+  }, [])
+
+  const loadSettings = () => {
+    try {
+      const savedSettings = localStorage.getItem('rag-settings')
+      if (savedSettings) {
+        setSettings(JSON.parse(savedSettings))
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error)
+    }
+  }
+
+  const checkBackendStatus = async () => {
+    const health = await ragService.healthCheck()
+    const config = ragService.checkConfiguration()
+    setBackendStatus({
+      documentProcessor: health.documentProcessor,
+      ragBackend: health.ragBackend,
+      configured: config.configured
+    })
+  }
 
   const aiModels: AIModelConfig[] = [
     {
-      id: "gpt-4-turbo",
-      name: "GPT-4 Turbo",
-      description: "Modelo más avanzado, ideal para análisis complejos",
-      maxTokens: 4096,
-      available: true
-    },
-    {
-      id: "gpt-3.5-turbo",
-      name: "GPT-3.5 Turbo",
-      description: "Más rápido y económico, bueno para consultas generales",
+      id: "gemini-pro",
+      name: "Gemini Pro",
+      description: "Modelo de Google, integración con GCP (Actualmente en uso)",
       maxTokens: 2048,
       available: true
     },
     {
-      id: "claude-3",
-      name: "Claude 3 Sonnet",
-      description: "Excelente para análisis de documentos largos",
-      maxTokens: 8192,
+      id: "gemini-1.5-flash",
+      name: "Gemini 1.5 Flash",
+      description: "Más rápido, ideal para respuestas rápidas",
+      maxTokens: 4096,
       available: false
     },
     {
-      id: "gemini-pro",
-      name: "Gemini Pro",
-      description: "Modelo de Google, integración con GCP",
-      maxTokens: 2048,
-      available: true
+      id: "gemini-1.5-pro",
+      name: "Gemini 1.5 Pro",
+      description: "Modelo más avanzado con contexto ampliado",
+      maxTokens: 8192,
+      available: false
     }
   ]
 
@@ -102,25 +144,70 @@ export function SettingsSection() {
   }
 
   const saveSettings = () => {
-    // In real implementation, save to backend
-    console.log("Saving settings:", settings)
-    setUnsavedChanges(false)
+    try {
+      localStorage.setItem('rag-settings', JSON.stringify(settings))
+      setUnsavedChanges(false)
+      toast({
+        title: "Configuración guardada",
+        description: "Los cambios se han guardado correctamente",
+      })
+    } catch (error) {
+      console.error("Error saving settings:", error)
+      toast({
+        title: "Error",
+        description: "No se pudo guardar la configuración",
+        variant: "destructive"
+      })
+    }
   }
 
   const resetSettings = () => {
-    // Reset to defaults
+    setSettings(defaultSettings)
     setUnsavedChanges(true)
+    toast({
+      title: "Configuración restablecida",
+      description: "Los valores predeterminados han sido restaurados",
+    })
   }
 
-  const testModel = async () => {
-    // Test current model configuration
-    console.log("Testing model with current settings...")
+  const confirmTest = async () => {
+    setTestDialogOpen(false)
+
+    try {
+      toast({
+        title: "Probando configuración...",
+        description: "Verificando conexión con el backend",
+      })
+
+      await checkBackendStatus()
+
+      if (backendStatus.ragBackend) {
+        const testQuery = await ragService.queryDocuments("Prueba de configuración")
+        toast({
+          title: "Prueba exitosa",
+          description: "La configuración está funcionando correctamente",
+        })
+      } else {
+        toast({
+          title: "Error de conexión",
+          description: "No se pudo conectar con el backend RAG",
+          variant: "destructive"
+        })
+      }
+    } catch (error) {
+      console.error("Error testing model:", error)
+      toast({
+        title: "Error en la prueba",
+        description: error instanceof Error ? error.message : "Error desconocido",
+        variant: "destructive"
+      })
+    }
   }
 
   return (
-    <div className="h-full flex flex-col p-6">
+    <div className="h-full flex flex-col p-6 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-shrink-0">
         <div>
           <h2 className="text-2xl font-semibold text-foreground">Configuración</h2>
           <p className="text-sm text-muted-foreground">
@@ -142,8 +229,52 @@ export function SettingsSection() {
         </div>
       </div>
 
-      <Tabs defaultValue="ai-model" className="flex-1">
-        <TabsList className="grid w-full grid-cols-5">
+      {/* Backend Status */}
+      <Card className="mb-6 flex-shrink-0">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Estado del Backend:</span>
+                {backendStatus.configured ? (
+                  <Badge variant="default" className="gap-1">
+                    <CheckCircle className="w-3 h-3" />
+                    Configurado
+                  </Badge>
+                ) : (
+                  <Badge variant="destructive" className="gap-1">
+                    <XCircle className="w-3 h-3" />
+                    No configurado
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Document Processor:</span>
+                {backendStatus.documentProcessor ? (
+                  <CheckCircle className="w-4 h-4 text-green-600" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600" />
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">RAG Backend:</span>
+                {backendStatus.ragBackend ? (
+                  <CheckCircle className="w-4 h-4 text-green-600" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600" />
+                )}
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={checkBackendStatus}>
+              <RotateCcw className="w-4 h-4 mr-2" />
+              Verificar
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Tabs defaultValue="ai-model" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <TabsList className="grid w-full grid-cols-5 flex-shrink-0">
           <TabsTrigger value="ai-model">Modelo IA</TabsTrigger>
           <TabsTrigger value="language">Idioma</TabsTrigger>
           <TabsTrigger value="rag">RAG</TabsTrigger>
@@ -151,7 +282,7 @@ export function SettingsSection() {
           <TabsTrigger value="security">Seguridad</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="ai-model" className="space-y-6">
+        <TabsContent value="ai-model" className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -255,7 +386,7 @@ export function SettingsSection() {
 
               {/* Test Model */}
               <div className="flex gap-2">
-                <Button variant="outline" onClick={testModel}>
+                <Button variant="outline" onClick={() => setTestDialogOpen(true)}>
                   <TestTube className="w-4 h-4 mr-2" />
                   Probar Configuración
                 </Button>
@@ -285,7 +416,7 @@ export function SettingsSection() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="language" className="space-y-6">
+        <TabsContent value="language" className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -325,7 +456,7 @@ export function SettingsSection() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="rag" className="space-y-6">
+        <TabsContent value="rag" className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -402,7 +533,7 @@ export function SettingsSection() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="system" className="space-y-6">
+        <TabsContent value="system" className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -454,7 +585,7 @@ export function SettingsSection() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="security" className="space-y-6">
+        <TabsContent value="security" className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -507,6 +638,33 @@ export function SettingsSection() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Test Configuration Dialog */}
+      <AlertDialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Probar configuración del modelo</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esto enviará una consulta de prueba al backend RAG para verificar que la configuración actual esté funcionando correctamente.
+              <br /><br />
+              <strong>Modelo seleccionado:</strong> {aiModels.find(m => m.id === settings.selectedModel)?.name}
+              <br />
+              <strong>Temperature:</strong> {settings.temperature[0]}
+              <br />
+              <strong>Max tokens:</strong> {settings.maxResponseLength[0]}
+              <br /><br />
+              ¿Deseas continuar con la prueba?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmTest}>
+              <TestTube className="w-4 h-4 mr-2" />
+              Probar ahora
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

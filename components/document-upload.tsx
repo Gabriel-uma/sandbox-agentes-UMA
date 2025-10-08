@@ -48,44 +48,47 @@ export function DocumentUpload() {
   }
 
   const handleFiles = (fileList: File[]) => {
-    const newFiles = fileList.map(file => ({
-      id: Math.random().toString(36).substr(2, 9),
-      name: file.name,
-      size: file.size,
-      status: 'uploading' as const,
-      progress: 0
-    }))
-
-    setFiles(prev => [...prev, ...newFiles])
-
-    // Simulate file upload and processing
-    newFiles.forEach(file => {
-      simulateUpload(file.id)
+    // Upload each file
+    fileList.forEach(file => {
+      uploadFile(file)
     })
   }
 
-  const simulateUpload = async (fileId: string) => {
-    const file = files.find(f => f.id === fileId)
-    if (!file) return
+  const uploadFile = async (file: File) => {
+    const fileId = Math.random().toString(36).substr(2, 9)
 
-    // Simulate upload progress
-    for (let progress = 0; progress <= 100; progress += 10) {
-      await new Promise(resolve => setTimeout(resolve, 200))
-      setFiles(prev => prev.map(f =>
-        f.id === fileId ? { ...f, progress } : f
-      ))
+    // Add file to list with uploading status
+    const newFile: UploadedFile = {
+      id: fileId,
+      name: file.name,
+      size: file.size,
+      status: 'uploading',
+      progress: 0
     }
 
-    try {
-      // Use mock service to simulate backend upload
-      await ragService.initializeBackend()
+    setFiles(prev => [...prev, newFile])
 
-      // Simulate processing completion
-      await new Promise(resolve => setTimeout(resolve, 1000))
+    try {
+      // Simulate progress updates
+      const progressInterval = setInterval(() => {
+        setFiles(prev => prev.map(f =>
+          f.id === fileId && f.progress < 90
+            ? { ...f, progress: f.progress + 10 }
+            : f
+        ))
+      }, 200)
+
+      // Upload file using RAG service
+      const result = await ragService.uploadDocument(file)
+
+      clearInterval(progressInterval)
+
+      // Update to processed status
       setFiles(prev => prev.map(f =>
         f.id === fileId ? { ...f, status: 'processed', progress: 100 } : f
       ))
     } catch (error) {
+      console.error('Error uploading document:', error)
       setFiles(prev => prev.map(f =>
         f.id === fileId ? { ...f, status: 'error', progress: 0 } : f
       ))
@@ -126,7 +129,7 @@ export function DocumentUpload() {
       >
         <CardContent className="p-8 text-center">
           <div className="mb-4">
-            <Upload className="w-12 h-12 text-muted-foreground mx-auto" />
+            <Upload className="w-20 h-20 text-muted-foreground mx-auto" />
           </div>
           <div className="mb-4">
             <p className="text-sm font-medium text-foreground mb-1">
