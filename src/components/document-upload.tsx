@@ -1,7 +1,7 @@
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { ragService } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Upload, FileText, X, CheckCircle, AlertCircle } from "lucide-react"
@@ -11,13 +11,18 @@ interface UploadedFile {
   id: string
   name: string
   size: number
-  status: 'uploading' | 'processed' | 'error'
+  status: 'uploading' | 'processed' | 'error' | 'retrying'
   progress: number
+  errorMessage?: string
+  retryCount?: number
 }
 
 export function DocumentUpload() {
   const [dragActive, setDragActive] = useState(false)
   const [files, setFiles] = useState<UploadedFile[]>([])
+  const [uploadQueue, setUploadQueue] = useState<File[]>([])
+  const [activeUploads, setActiveUploads] = useState(0)
+  const MAX_CONCURRENT_UPLOADS = 2 // Limit concurrent uploads
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -46,46 +51,103 @@ export function DocumentUpload() {
   }
 
   const handleFiles = (fileList: File[]) => {
-    const newFiles = fileList.map(file => ({
-      id: Math.random().toString(36).substr(2, 9),
+    // Add files to queue
+    setUploadQueue(prev => [...prev, ...fileList])
+  }
+
+  // Process upload queue with concurrency limit
+  useEffect(() => {
+    if (uploadQueue.length > 0 && activeUploads < MAX_CONCURRENT_UPLOADS) {
+      const nextFile = uploadQueue[0]
+      setUploadQueue(prev => prev.slice(1))
+      processUpload(nextFile)
+    }
+  }, [uploadQueue, activeUploads])
+
+  const processUpload = async (file: File) => {
+    setActiveUploads(prev => prev + 1)
+    await uploadFile(file)
+    setActiveUploads(prev => prev - 1)
+  }
+
+  const uploadFile = async (file: File, retryCount = 0) => {
+    const fileId = Math.random().toString(36).substr(2, 9)
+
+    // Add file to list with uploading status
+    const newFile = {
+      id: fileId,
       name: file.name,
       size: file.size,
       status: 'uploading' as const,
-      progress: 0
-    }))
-
-    setFiles(prev => [...prev, ...newFiles])
-
-    // Simulate file upload and processing
-    newFiles.forEach(file => {
-      simulateUpload(file.id)
-    })
-  }
-
-  const simulateUpload = async (fileId: string) => {
-    const file = files.find(f => f.id === fileId)
-    if (!file) return
-
-    // Simulate upload progress
-    for (let progress = 0; progress <= 100; progress += 10) {
-      await new Promise(resolve => setTimeout(resolve, 200))
-      setFiles(prev => prev.map(f =>
-        f.id === fileId ? { ...f, progress } : f
-      ))
+      progress: 0,
+      retryCount
     }
 
-    try {
-      // Use mock service to simulate backend upload
-      await ragService.initializeBackend()
+    setFiles(prev => [...prev, newFile])
 
-      // Simulate processing completion
-      await new Promise(resolve => setTimeout(resolve, 1000))
+    let progressInterval: NodeJS.Timeout | null = null
+
+    try {
+      // Start progress simulation
+      progressInterval = setInterval(() => {
+        setFiles(prev => prev.map(f => {
+          if (f.id === fileId && f.progress < 90) {
+            return { ...f, progress: f.progress + 10 }
+          }
+          return f
+        }))
+      }, 200)
+
+      // Upload document to backend
+      const uploadedDoc = await ragService.uploadDocument(file)
+
+      // Clear progress interval
+      if (progressInterval) clearInterval(progressInterval)
+
+      // Mark as processed
       setFiles(prev => prev.map(f =>
         f.id === fileId ? { ...f, status: 'processed', progress: 100 } : f
       ))
+
+      // Check if document was uploaded but indexing is pending
+      if (uploadedDoc.indexed === false || uploadedDoc.status === 'indexed_pending') {
+        console.log('Document uploaded but indexing pending:', uploadedDoc)
+        setFiles(prev => prev.map(f =>
+          f.id === fileId
+            ? {
+                ...f,
+                status: 'processed',
+                progress: 100,
+                errorMessage: '⚠️ Documento guardado. Indexación pendiente por límite de cuota.'
+              }
+            : f
+        ))
+      } else {
+        console.log('Document uploaded successfully:', uploadedDoc)
+      }
     } catch (error) {
+      // Clear progress interval on error
+      if (progressInterval) clearInterval(progressInterval)
+
+      console.error('Error uploading document:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido'
+
+      // Check if it's a quota error
+      const isQuotaError = errorMessage.includes('quota') ||
+                          errorMessage.includes('429') ||
+                          errorMessage.includes('concurrent')
+
       setFiles(prev => prev.map(f =>
-        f.id === fileId ? { ...f, status: 'error', progress: 0 } : f
+        f.id === fileId
+          ? {
+              ...f,
+              status: 'error',
+              progress: 0,
+              errorMessage: isQuotaError
+                ? 'Límite de operaciones concurrentes excedido. El backend reintentará automáticamente.'
+                : errorMessage
+            }
+          : f
       ))
     }
   }
@@ -171,9 +233,17 @@ export function DocumentUpload() {
                         {file.status === 'error' && (
                           <AlertCircle className="w-4 h-4 text-red-600" />
                         )}
-                        <Badge variant={file.status === 'processed' ? 'default' : 'secondary'}>
+                        {file.status === 'retrying' && (
+                          <AlertCircle className="w-4 h-4 text-yellow-600" />
+                        )}
+                        <Badge variant={
+                          file.status === 'processed' ? 'default' :
+                          file.status === 'error' ? 'destructive' :
+                          file.status === 'retrying' ? 'secondary' : 'secondary'
+                        }>
                           {file.status === 'uploading' ? 'Procesando' :
-                           file.status === 'processed' ? 'Listo' : 'Error'}
+                           file.status === 'processed' ? 'Listo' :
+                           file.status === 'retrying' ? 'Reintentando' : 'Error'}
                         </Badge>
                         <Button
                           variant="ghost"
@@ -197,6 +267,11 @@ export function DocumentUpload() {
                     </div>
                     {file.status === 'uploading' && (
                       <Progress value={file.progress} className="mt-2 h-1" />
+                    )}
+                    {file.errorMessage && (
+                      <p className={`text-xs mt-1 ${file.status === 'error' ? 'text-red-600' : 'text-yellow-600'}`}>
+                        {file.errorMessage}
+                      </p>
                     )}
                   </div>
                 </div>

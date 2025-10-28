@@ -29,3 +29,48 @@ next-env.d.ts
 /.claude/
 
 nul
+.vercel
+
+# Vite
+dist
+dist-ssr
+*.local
+
+# Temp extraction folders
+temp-extract/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# Logs
+*.log
+*.log.*
+
+# Archives
+*.zip
+*.tar.gz
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+project/
+build.log
+cloud-build.log
+error.log
+*-build.log
+*.tar.gz

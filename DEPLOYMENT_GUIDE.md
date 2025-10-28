@@ -1,313 +1,414 @@
-# Guía de Despliegue Completo - Sistema RAG
+# Guía de Despliegue - Fábrica de Agentes AI Weekly
 
-## 📋 Pre-requisitos
+Esta guía te ayudará a desplegar tu fábrica de agentes completa en GitHub y GCP (Google Cloud Platform).
 
-- [x] Google Cloud SDK instalado
-- [x] Terraform instalado (>= 1.0)
-- [x] Docker instalado
-- [x] Node.js y npm instalados
-- [x] Permisos en GCP: `roles/editor` + `roles/resourcemanager.projectIamAdmin`
+## Arquitectura de Despliegue
 
-## 🚀 Paso 1: Construir y Subir Imágenes Docker
-
-### 1.1 Autenticar Docker con GCR
-
-```bash
-gcloud auth configure-docker
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         GitHub                               │
+│              (Repositorio de código fuente)                  │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       │ Push trigger
+                       │
+         ┌─────────────▼────────────────┐
+         │      Google Cloud Build       │
+         │    (CI/CD automatizado)       │
+         └─────────────┬─────────────────┘
+                       │
+         ┌─────────────┴─────────────────┐
+         │                               │
+         ▼                               ▼
+┌────────────────────┐         ┌────────────────────┐
+│   Cloud Run APIs   │         │  Vercel Frontend   │
+│                    │         │                    │
+│ • document-        │         │  • React + Vite    │
+│   processor        │         │  • TypeScript      │
+│ • rag-backend      │         │  • Tailwind CSS    │
+│ • smartaudit-api   │         │                    │
+└────────────────────┘         └────────────────────┘
+         │
+         │ Almacenamiento
+         ▼
+┌────────────────────┐
+│  Cloud Storage +   │
+│  BigQuery          │
+└────────────────────┘
 ```
 
-### 1.2 Construir imagen del Document Processor
+## Pre-requisitos
 
+### 1. Herramientas instaladas
+- [Git](https://git-scm.com/)
+- [Node.js 18+](https://nodejs.org/)
+- [Python 3.11+](https://www.python.org/)
+- [Google Cloud SDK (gcloud)](https://cloud.google.com/sdk/docs/install)
+- [GitHub CLI (opcional)](https://cli.github.com/)
+
+### 2. Acceso a servicios
+- Cuenta de GitHub
+- Proyecto de Google Cloud Platform (actual: `uma-tech-ai-lab`)
+- Cuenta de Vercel conectada a GitHub
+
+### 3. Permisos en GCP
 ```bash
-cd document-processor
-docker build -t gcr.io/uma-tech-ai-lab/document-processor:latest .
-docker push gcr.io/uma-tech-ai-lab/document-processor:latest
-cd ..
+# Verificar proyecto actual
+gcloud config get-value project
+
+# Verificar permisos
+gcloud projects get-iam-policy uma-tech-ai-lab
 ```
 
-### 1.3 Construir imagen del RAG Backend
+## Paso 1: Preparar el Repositorio GitHub
 
+### 1.1. Verificar el estado del repositorio
 ```bash
-cd rag-backend
-docker build -t gcr.io/uma-tech-ai-lab/rag-backend:latest .
-docker push gcr.io/uma-tech-ai-lab/rag-backend:latest
-cd ..
+cd C:\Users\ivang\OneDrive\Documentos\code\agente-weekly-ai
+git status
 ```
 
-## ☁️ Paso 2: Desplegar Infraestructura con Terraform
-
-### 2.1 Navegar al directorio de infraestructura
-
+### 1.2. Agregar cambios al staging
 ```bash
-cd infra
+# Revisar archivos modificados
+git status
+
+# Agregar todos los cambios
+git add .
+
+# O agregar selectivamente
+git add src/agents/smartaudit/
+git add .gitignore
+git add DEPLOYMENT_GUIDE.md
 ```
 
-### 2.2 Inicializar Terraform
-
+### 1.3. Crear commit
 ```bash
-terraform init
+git commit -m "feat: Add SmartAudit agent and deployment configuration
+
+- Add SmartAudit backend API with FastAPI
+- Add SmartAudit frontend components
+- Configure Cloud Build for all services
+- Update .gitignore for Python and logs
+- Add comprehensive deployment guide"
 ```
 
-### 2.3 Revisar el plan
-
+### 1.4. Push a GitHub
 ```bash
-terraform plan
+git push origin main
 ```
 
-### 2.4 Aplicar la infraestructura
+## Paso 2: Configurar Google Cloud Platform
 
+### 2.1. Configurar proyecto
 ```bash
-terraform apply
+# Establecer proyecto
+gcloud config set project uma-tech-ai-lab
+
+# Habilitar APIs necesarias
+gcloud services enable cloudbuild.googleapis.com
+gcloud services enable run.googleapis.com
+gcloud services enable artifactregistry.googleapis.com
+gcloud services enable storage.googleapis.com
+gcloud services enable bigquery.googleapis.com
 ```
 
-Confirmar con `yes` cuando se solicite.
-
-### 2.5 Guardar outputs importantes
+### 2.2. Crear repositorios en Artifact Registry
 
 ```bash
-# URL del Document Processor
-terraform output document_processor_url
+# Crear repositorio para SmartAudit
+gcloud artifacts repositories create smartaudit-repo \
+  --repository-format=docker \
+  --location=us-central1 \
+  --description="SmartAudit API container images"
 
-# URL del RAG Backend
-terraform output rag_backend_url
-
-# Bucket name
-terraform output bucket_name
-
-# Todos los outputs
-terraform output
+# Verificar repositorios existentes
+gcloud artifacts repositories list --location=us-central1
 ```
 
-## 🌐 Paso 3: Configurar Frontend
-
-### 3.1 Crear archivo .env
+### 2.3. Configurar service accounts
 
 ```bash
-cd ..  # Regresar al directorio raíz
-cp .env.example .env
+# Ver service accounts existentes
+gcloud iam service-accounts list
+
+# Si necesitas crear uno nuevo para SmartAudit
+gcloud iam service-accounts create smartaudit-sa \
+  --display-name="SmartAudit Service Account"
+
+# Dar permisos necesarios
+gcloud projects add-iam-policy-binding uma-tech-ai-lab \
+  --member="serviceAccount:smartaudit-sa@uma-tech-ai-lab.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+
+gcloud projects add-iam-policy-binding uma-tech-ai-lab \
+  --member="serviceAccount:smartaudit-sa@uma-tech-ai-lab.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataViewer"
 ```
 
-### 3.2 Actualizar .env con URLs reales
+## Paso 3: Desplegar Backends en Cloud Run
 
-Editar `.env` y reemplazar las URLs con los outputs de Terraform:
+### Opción A: Despliegue Manual
 
+#### 3.1. SmartAudit API
+```bash
+cd src/agents/smartaudit/backend/smartaudit-api
+
+# Build y push de imagen
+gcloud builds submit --tag us-central1-docker.pkg.dev/uma-tech-ai-lab/smartaudit-repo/smartaudit-api:latest
+
+# Deploy a Cloud Run
+gcloud run deploy smartaudit-api \
+  --image us-central1-docker.pkg.dev/uma-tech-ai-lab/smartaudit-repo/smartaudit-api:latest \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --max-instances 10 \
+  --memory 512Mi \
+  --cpu 1 \
+  --min-instances 0 \
+  --timeout 300
+```
+
+#### 3.2. RAG Backend
+```bash
+cd ../../rag-backend
+
+gcloud builds submit --tag gcr.io/uma-tech-ai-lab/rag-agent-backend
+
+gcloud run deploy rag-agent-backend \
+  --image gcr.io/uma-tech-ai-lab/rag-agent-backend \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --memory 1Gi \
+  --cpu 1
+```
+
+#### 3.3. Document Processor
+```bash
+cd ../document-processor
+
+gcloud builds submit --tag gcr.io/uma-tech-ai-lab/rag-document-processor
+
+gcloud run deploy rag-document-processor \
+  --image gcr.io/uma-tech-ai-lab/rag-document-processor \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --memory 1Gi \
+  --cpu 1
+```
+
+### Opción B: Despliegue Automatizado con Cloud Build
+
+```bash
+# Desde la raíz del proyecto
+./scripts/deploy-all-gcp.sh
+```
+
+### 3.4. Obtener URLs de los servicios
+```bash
+# SmartAudit API
+gcloud run services describe smartaudit-api --region us-central1 --format 'value(status.url)'
+
+# RAG Backend
+gcloud run services describe rag-agent-backend --region us-central1 --format 'value(status.url)'
+
+# Document Processor
+gcloud run services describe rag-document-processor --region us-central1 --format 'value(status.url)'
+```
+
+## Paso 4: Configurar Variables de Entorno
+
+### 4.1. Crear archivo .env.production
+```bash
+# En la raíz del proyecto
+cp .env .env.production
+```
+
+Editar `.env.production` con las URLs de producción:
 ```env
-VITE_DOCUMENT_PROCESSOR_URL=https://rag-document-processor-[hash]-uc.a.run.app
-VITE_RAG_BACKEND_URL=https://rag-agent-backend-[hash]-uc.a.run.app
+# Variables de entorno para Producción
+
+# URL del servicio Document Processor en Cloud Run
+VITE_DOCUMENT_PROCESSOR_URL=https://rag-document-processor-117511395113.us-central1.run.app
+
+# URL del servicio RAG Backend en Cloud Run
+VITE_RAG_BACKEND_URL=https://rag-agent-backend-117511395113.us-central1.run.app
+
+# URL del servicio SmartAudit en Cloud Run
+VITE_SMARTAUDIT_API_URL=https://smartaudit-api-XXXXXXXXX-uc.a.run.app
+
+# Project ID de GCP
 VITE_PROJECT_ID=uma-tech-ai-lab
+
+# Nombre del bucket de Cloud Storage
 VITE_BUCKET_NAME=uma-tech-ai-lab-rag-documents
 ```
 
-### 3.3 Instalar dependencias y ejecutar
+### 4.2. Configurar en Vercel
+
+En la configuración de Vercel, agregar las mismas variables de entorno:
+1. Ve a tu proyecto en Vercel Dashboard
+2. Settings → Environment Variables
+3. Agrega cada variable con su valor
+
+## Paso 5: Desplegar Frontend en Vercel
+
+### Opción A: Desde Vercel Dashboard
+1. Ve a [vercel.com](https://vercel.com)
+2. Importa tu repositorio de GitHub
+3. Configura las variables de entorno (Paso 4.2)
+4. Deploy
+
+### Opción B: Desde CLI
+```bash
+# Instalar Vercel CLI si no lo tienes
+npm i -g vercel
+
+# Login
+vercel login
+
+# Deploy
+vercel --prod
+
+# O con variables de entorno desde archivo
+vercel --prod --env-file .env.production
+```
+
+## Paso 6: Verificar Despliegue
+
+### 6.1. Verificar backends
+```bash
+# SmartAudit
+curl https://smartaudit-api-XXXXXXXXX-uc.a.run.app/health
+
+# RAG Backend
+curl https://rag-agent-backend-117511395113.us-central1.run.app/health
+
+# Document Processor
+curl https://rag-document-processor-117511395113.us-central1.run.app/health
+```
+
+### 6.2. Verificar frontend
+Abre la URL de Vercel en el navegador y prueba:
+- ✅ Carga de documentos
+- ✅ Chat RAG
+- ✅ Agente SmartAudit (Analista, Auditor, Revisor)
+
+## Paso 7: Configurar CI/CD Automatizado (Opcional)
+
+### 7.1. Conectar GitHub con Cloud Build
 
 ```bash
-npm install
-npm run dev
+# Conectar repositorio
+gcloud beta builds triggers create github \
+  --repo-name=agent-ai-weekly \
+  --repo-owner=RGabrielR \
+  --branch-pattern="^main$" \
+  --build-config=src/agents/smartaudit/backend/smartaudit-api/cloudbuild.yaml \
+  --included-files="src/agents/smartaudit/backend/**"
 ```
 
-El frontend estará disponible en `http://localhost:5173`
+### 7.2. Configurar triggers para cada servicio
 
-## ✅ Paso 4: Verificación
+Crear triggers para:
+- `document-processor/cloudbuild.yaml`
+- `rag-backend/cloudbuild.yaml`
+- `src/agents/smartaudit/backend/smartaudit-api/cloudbuild.yaml`
 
-### 4.1 Verificar servicios backend
+## Monitoreo y Logs
+
+### Ver logs de Cloud Run
+```bash
+# SmartAudit
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=smartaudit-api" --limit 50
+
+# RAG Backend
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=rag-agent-backend" --limit 50
+```
+
+### Monitorear en consola
+- [Cloud Run Services](https://console.cloud.google.com/run?project=uma-tech-ai-lab)
+- [Cloud Build History](https://console.cloud.google.com/cloud-build/builds?project=uma-tech-ai-lab)
+- [Logs Explorer](https://console.cloud.google.com/logs?project=uma-tech-ai-lab)
+
+## Costos Estimados
+
+Con la configuración actual (min-instances=0):
+- **Cloud Run**: ~$5-20/mes (solo pagas por uso)
+- **Cloud Storage**: ~$1-5/mes (dependiendo de documentos almacenados)
+- **BigQuery**: Gratis hasta 10 GB almacenados, $5/TB consultado
+- **Vercel**: Gratis para proyectos personales
+- **Total estimado**: ~$10-30/mes en GCP
+
+## Troubleshooting
+
+### Error: Permission denied
+```bash
+# Verificar permisos de service account
+gcloud projects get-iam-policy uma-tech-ai-lab
+```
+
+### Error: Image not found
+```bash
+# Verificar que el repositorio en Artifact Registry existe
+gcloud artifacts repositories list
+```
+
+### Error: CORS en Cloud Run
+Verificar que en `main.py` de cada backend están configurados los orígenes correctos:
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://tu-app.vercel.app",
+        "http://localhost:5173"
+    ],
+    ...
+)
+```
+
+## Comandos Útiles
 
 ```bash
-# Health check Document Processor
-curl https://[DOCUMENT_PROCESSOR_URL]/health
+# Ver todos los servicios de Cloud Run
+gcloud run services list --region us-central1
 
-# Health check RAG Backend
-curl https://[RAG_BACKEND_URL]/health
+# Ver builds recientes
+gcloud builds list --limit 10
+
+# Ver logs en tiempo real
+gcloud run services logs tail smartaudit-api --region us-central1
+
+# Eliminar un servicio
+gcloud run services delete SERVICE_NAME --region us-central1
+
+# Actualizar configuración de servicio
+gcloud run services update smartaudit-api \
+  --region us-central1 \
+  --memory 1Gi \
+  --max-instances 10
 ```
 
-Ambos deben retornar:
-```json
-{
-  "status": "healthy",
-  "service": "...",
-  "version": "1.0.0"
-}
-```
+## Próximos Pasos
 
-### 4.2 Probar subida de documento
+- [ ] Configurar autenticación con IAP (Identity-Aware Proxy)
+- [ ] Implementar rate limiting
+- [ ] Configurar alertas de monitoreo
+- [ ] Configurar backup automático de BigQuery
+- [ ] Implementar tests automatizados en CI/CD
+- [ ] Configurar staging environment
 
-```bash
-curl -X POST \\
-  -F "file=@test-document.pdf" \\
-  https://[DOCUMENT_PROCESSOR_URL]/upload
-```
+## Recursos Adicionales
 
-### 4.3 Probar consulta RAG
-
-```bash
-curl -X POST \\
-  -H "Content-Type: application/json" \\
-  -d '{"question": "¿Qué información tienes?"}' \\
-  https://[RAG_BACKEND_URL]/query
-```
-
-### 4.4 Verificar BigQuery
-
-```bash
-cd infra
-bq query --use_legacy_sql=false \\
-  'SELECT * FROM uma-tech-ai-lab.rag_chat_history.conversations LIMIT 10'
-```
-
-## 📊 Paso 5: Monitoreo
-
-### Ver logs de servicios
-
-```bash
-# Logs del Document Processor
-gcloud run services logs read rag-document-processor --region=us-central1 --limit=50
-
-# Logs del RAG Backend
-gcloud run services logs read rag-agent-backend --region=us-central1 --limit=50
-```
-
-### Verificar recursos en GCP Console
-
-1. **Cloud Run**: https://console.cloud.google.com/run
-2. **Cloud Storage**: https://console.cloud.google.com/storage
-3. **BigQuery**: https://console.cloud.google.com/bigquery
-4. **Vertex AI**: https://console.cloud.google.com/vertex-ai
-
-## 🔧 Comandos Útiles
-
-### Actualizar servicios después de cambios en el código
-
-```bash
-# Rebuild y push de imágenes
-docker build -t gcr.io/uma-tech-ai-lab/document-processor:latest document-processor/
-docker push gcr.io/uma-tech-ai-lab/document-processor:latest
-
-docker build -t gcr.io/uma-tech-ai-lab/rag-backend:latest rag-backend/
-docker push gcr.io/uma-tech-ai-lab/rag-backend:latest
-
-# Terraform aplicará automáticamente las nuevas imágenes
-cd infra
-terraform apply
-```
-
-### Ver contenido del bucket
-
-```bash
-gsutil ls -r gs://uma-tech-ai-lab-rag-documents/
-```
-
-### Consultar conversaciones en BigQuery
-
-```bash
-bq query --use_legacy_sql=false \\
-  "SELECT
-    conversation_id,
-    timestamp,
-    user_message,
-    assistant_message,
-    confidence
-  FROM uma-tech-ai-lab.rag_chat_history.conversations
-  ORDER BY timestamp DESC
-  LIMIT 10"
-```
-
-## 🛡️ Seguridad para Producción
-
-### 1. Configurar CORS específicos
-
-Editar `infra/terraform.tfvars`:
-
-```hcl
-allowed_cors_origins = ["https://tu-dominio.com"]
-```
-
-### 2. Requerir autenticación en Cloud Run (opcional)
-
-```bash
-gcloud run services update rag-document-processor \\
-  --no-allow-unauthenticated \\
-  --region us-central1
-
-gcloud run services update rag-agent-backend \\
-  --no-allow-unauthenticated \\
-  --region us-central1
-```
-
-### 3. Configurar alertas de monitoreo
-
-Ir a Cloud Monitoring y configurar alertas para:
-- Errores 5xx en Cloud Run
-- Latencia > 10s
-- CPU > 80%
-- Memoria > 80%
-
-## 🗑️ Limpieza / Destrucción
-
-**⚠️ CUIDADO**: Esto eliminará TODOS los recursos creados
-
-```bash
-cd infra
-terraform destroy
-```
-
-## 📞 Troubleshooting
-
-### Error: "Permission denied"
-- Verificar que tienes `roles/editor` y `roles/resourcemanager.projectIamAdmin`
-- Ejecutar: `gcloud auth application-default login`
-
-### Error: "Image not found"
-- Asegurarte de haber construido y subido las imágenes Docker primero
-- Verificar nombres de imágenes en GCR: `gcloud container images list`
-
-### Error: "Service unavailable"
-- Verificar logs con `gcloud run services logs read [SERVICE_NAME]`
-- Verificar que las variables de entorno estén configuradas correctamente
-- Hacer health check a los servicios
-
-### Activar modo API publica de Gemini (opcional)
-- Habilitar la API y crear una API Key:
-  ```bash
-  gcloud services enable generativelanguage.googleapis.com --project=uma-tech-ai-lab
-  gcloud alpha services api-keys create \
-    --display-name="rag-genai" \
-    --project=uma-tech-ai-lab \
-    --restrictions="apiTargets=generativelanguage.googleapis.com"
-  ```
-- Guardar la clave en Secret Manager:
-  ```bash
-  gcloud secrets create GENAI_API_KEY --replication-policy=automatic --project=uma-tech-ai-lab
-  echo -n "API_KEY_AQUI" | gcloud secrets versions add GENAI_API_KEY --data-file=- --project=uma-tech-ai-lab
-  ```
-- Redeploy Cloud Run con la variable/secret:
-  ```bash
-  gcloud run deploy rag-agent-backend \
-    --image gcr.io/uma-tech-ai-lab/rag-backend:latest \
-    --project uma-tech-ai-lab \
-    --region us-central1 \
-    --set-env-vars PROJECT_ID=uma-tech-ai-lab,REGION=us-central1,MODEL_NAME=models/gemini-2.5-flash,INDEX_ENDPOINT=<endpoint_full_name>,DEPLOYED_INDEX_ID=<deployed_index_id> \
-    --set-secrets GENAI_API_KEY=GENAI_API_KEY:latest
-  ```
-  > Reemplaza `<endpoint_full_name>` y `<deployed_index_id>` con los valores reales del Matching Engine (Terraform output o comando `gcloud ai index-endpoints describe`).
-- Para volver a Vertex AI nativo, eliminar `GENAI_API_KEY` y redeploy. El backend detecta automaticamente el modo.
-
-### Frontend no conecta con backend
-- Verificar que `.env` tenga las URLs correctas
-- Verificar que los servicios Cloud Run permitan tráfico no autenticado
-- Abrir Developer Tools en el navegador y revisar errores de CORS
-
-### BigQuery: "Table not found"
-- Esperar a que Terraform termine de crear todos los recursos
-- Verificar en BigQuery Console que exista el dataset `rag_chat_history`
+- [Cloud Run Documentation](https://cloud.google.com/run/docs)
+- [Cloud Build Documentation](https://cloud.google.com/build/docs)
+- [Vercel Documentation](https://vercel.com/docs)
+- [FastAPI Deployment](https://fastapi.tiangolo.com/deployment/)
 
 ---
 
-## 🎉 ¡Sistema Desplegado!
-
-Tu sistema RAG está ahora completamente funcional:
-
-- ✅ Document Processor procesando y indexando documentos
-- ✅ RAG Backend generando respuestas con Gemini
-- ✅ Conversaciones guardadas en BigQuery
-- ✅ Frontend conectado a los servicios
-
-**Siguiente paso**: Subir tus primeros documentos y hacer preguntas!
+**Última actualización**: 2025-10-28
+**Versión**: 1.0.0

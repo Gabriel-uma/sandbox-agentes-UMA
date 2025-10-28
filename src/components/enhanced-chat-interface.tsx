@@ -1,29 +1,13 @@
-import { useState, useRef, useEffect } from "react"
-import { ragService, type RAGResponse } from "@/lib/rag-service"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useChat } from "@/context/chat-context"
+import { ragService, type Document } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
-import { Send, Bot, User, FileText, Loader2, MessageSquare, Trash2, Download } from "lucide-react"
-
-interface Message {
-  id: string
-  type: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-  sources?: string[]
-  sessionId?: string
-}
-
-interface ChatSession {
-  id: string
-  name: string
-  timestamp: Date
-  messageCount: number
-}
+import { Send, Bot, User, FileText, Loader2, MessageSquare, Trash2, Download, RefreshCw } from "lucide-react"
 
 const sampleQuestions = [
   "¿Qué información está disponible en los documentos subidos?",
@@ -33,129 +17,62 @@ const sampleQuestions = [
 ]
 
 export function EnhancedChatInterface() {
-  const [messages, setMessages] = useState<Message[]>([])
+  const {
+    sessions,
+    activeSessionId,
+    messages,
+    isLoadingSessions,
+    isLoadingActiveSession,
+    isSending,
+    createNewSession,
+    selectSession,
+    sendMessage,
+    clearActiveSession
+  } = useChat()
+
   const [inputValue, setInputValue] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [currentSessionId, setCurrentSessionId] = useState<string>("")
-  const [sessions, setSessions] = useState<ChatSession[]>([])
-  const [sessionMessages, setSessionMessages] = useState<Record<string, Message[]>>({})
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [isLoadingDocs, setIsLoadingDocs] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // Load documents on mount
   useEffect(() => {
-    // Only create a session if there are none
-    if (sessions.length === 0) {
-      createNewSession()
-    }
+    loadDocuments()
   }, [])
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  const loadDocuments = async () => {
+    setIsLoadingDocs(true)
+    try {
+      const docs = await ragService.fetchDocuments()
+      setDocuments(docs.filter(d => d.status === 'ready'))
+    } catch (error) {
+      console.error('Error loading documents:', error)
+    } finally {
+      setIsLoadingDocs(false)
+    }
   }
 
-  useEffect(() => {
-    scrollToBottom()
+  // Calculate session totals
+  const sessionTotals = useMemo(() => {
+    const assistantMessages = messages.filter(m => m.type === 'assistant')
+    const totalTokens = assistantMessages.reduce((sum, m) => sum + (m.tokenUsage?.total_tokens || 0), 0)
+    const totalCost = assistantMessages.reduce((sum, m) => sum + (m.estimatedCost || 0), 0)
+    return { totalTokens, totalCost }
   }, [messages])
 
-  const createNewSession = () => {
-    const sessionId = `session_${Date.now()}`
-
-    // Save current session messages before switching
-    if (currentSessionId && messages.length > 0) {
-      setSessionMessages(prev => ({
-        ...prev,
-        [currentSessionId]: messages
-      }))
-    }
-
-    setCurrentSessionId(sessionId)
-    setMessages([])
-
-    const newSession: ChatSession = {
-      id: sessionId,
-      name: `Conversación ${new Date().toLocaleDateString()}`,
-      timestamp: new Date(),
-      messageCount: 0
-    }
-
-    setSessions(prev => [newSession, ...prev])
-  }
-
-  const loadSession = (sessionId: string) => {
-    // Save current session messages before switching
-    if (currentSessionId && messages.length > 0) {
-      setSessionMessages(prev => ({
-        ...prev,
-        [currentSessionId]: messages
-      }))
-    }
-
-    // Load the selected session messages
-    const savedMessages = sessionMessages[sessionId] || []
-    setMessages(savedMessages)
-    setCurrentSessionId(sessionId)
-  }
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, isSending])
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: inputValue,
-      timestamp: new Date(),
-      sessionId: currentSessionId
-    }
-
-    setMessages(prev => [...prev, userMessage])
+    if (!inputValue.trim() || isSending) return
+    await sendMessage(inputValue)
     setInputValue("")
-    setIsLoading(true)
-
-    // Update session message count
-    setSessions(prev => prev.map(session =>
-      session.id === currentSessionId
-        ? { ...session, messageCount: session.messageCount + 1 }
-        : session
-    ))
-
-    try {
-      const response: RAGResponse = await ragService.queryDocuments(inputValue)
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
-        content: response.answer,
-        timestamp: new Date(),
-        sources: response.sources,
-        sessionId: currentSessionId
-      }
-
-      setMessages(prev => [...prev, assistantMessage])
-      ragService.addMessage(assistantMessage)
-
-      // Update session message count again
-      setSessions(prev => prev.map(session =>
-        session.id === currentSessionId
-          ? { ...session, messageCount: session.messageCount + 1 }
-          : session
-      ))
-
-    } catch (error) {
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
-        content: "Lo siento, encontré un error al procesar tu pregunta. Por favor, inténtalo de nuevo.",
-        timestamp: new Date(),
-        sessionId: currentSessionId
-      }
-      setMessages(prev => [...prev, errorMessage])
-    } finally {
-      setIsLoading(false)
-    }
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
+  const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
       handleSendMessage()
     }
   }
@@ -164,54 +81,56 @@ export function EnhancedChatInterface() {
     setInputValue(question)
   }
 
-  const clearCurrentSession = () => {
-    setMessages([])
-    setSessionMessages(prev => ({
-      ...prev,
-      [currentSessionId]: []
-    }))
-    setSessions(prev => prev.map(session =>
-      session.id === currentSessionId
-        ? { ...session, messageCount: 0 }
-        : session
-    ))
-  }
-
-  const exportChat = () => {
+  const handleExportChat = () => {
+    if (!activeSessionId) return
     const chatData = {
-      sessionId: currentSessionId,
+      sessionId: activeSessionId,
       timestamp: new Date().toISOString(),
-      messages: messages
+      messages
     }
 
-    const blob = new Blob([JSON.stringify(chatData, null, 2)], { type: 'application/json' })
+    const blob = new Blob([JSON.stringify(chatData, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `chat-${currentSessionId}.json`
-    a.click()
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `chat-${activeSessionId}.json`
+    anchor.click()
     URL.revokeObjectURL(url)
   }
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Chat Header */}
         <div className="p-4 border-b border-border">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-3">
             <div>
               <h2 className="text-lg font-semibold text-foreground">Chat RAG</h2>
-              <p className="text-sm text-muted-foreground">
-                Conversación actual • {messages.length} mensajes
-              </p>
+              <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                <span>{messages.length} mensajes</span>
+                {sessionTotals.totalTokens > 0 && (
+                  <>
+                    <span>•</span>
+                    <span title="Tokens totales de la sesión">
+                      {sessionTotals.totalTokens.toLocaleString()} tokens
+                    </span>
+                    {sessionTotals.totalCost > 0 && (
+                      <>
+                        <span>•</span>
+                        <span className="text-green-600 dark:text-green-400 font-medium" title="Costo total estimado">
+                          ${sessionTotals.totalCost.toFixed(4)}
+                        </span>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={exportChat} disabled={messages.length === 0}>
+              <Button variant="outline" size="sm" onClick={handleExportChat} disabled={messages.length === 0}>
                 <Download className="w-4 h-4 mr-2" />
                 Exportar
               </Button>
-              <Button variant="outline" size="sm" onClick={clearCurrentSession} disabled={messages.length === 0}>
+              <Button variant="outline" size="sm" onClick={clearActiveSession} disabled={!messages.length}>
                 <Trash2 className="w-4 h-4 mr-2" />
                 Limpiar
               </Button>
@@ -221,11 +140,57 @@ export function EnhancedChatInterface() {
               </Button>
             </div>
           </div>
+
+          {/* Documents available section */}
+          <div className="flex items-center gap-2 pt-3 border-t border-border">
+            <div className="flex items-center gap-2 flex-1">
+              <FileText className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">
+                Documentos disponibles:
+              </span>
+              {isLoadingDocs ? (
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              ) : documents.length === 0 ? (
+                <span className="text-sm text-muted-foreground">
+                  No hay documentos. Sube documentos en la sección "Documentos"
+                </span>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {documents.slice(0, 5).map((doc) => (
+                    <Badge key={doc.id} variant="secondary" className="text-xs">
+                      {doc.name}
+                    </Badge>
+                  ))}
+                  {documents.length > 5 && (
+                    <Badge variant="outline" className="text-xs">
+                      +{documents.length - 5} más
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={loadDocuments}
+              disabled={isLoadingDocs}
+              className="h-8 w-8 p-0"
+              title="Recargar documentos"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoadingDocs ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
         </div>
 
-        {/* Messages Area */}
         <ScrollArea className="flex-1 p-6 h-full overflow-y-auto">
-          {messages.length === 0 ? (
+          {isLoadingActiveSession ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Cargando historial de la conversación...</p>
+              </div>
+            </div>
+          ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center">
               <div className="text-center mb-8">
                 <Bot className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
@@ -237,7 +202,6 @@ export function EnhancedChatInterface() {
                 </p>
               </div>
 
-              {/* Sample Questions */}
               <div className="w-full max-w-2xl">
                 <p className="text-sm font-medium text-foreground mb-3">Prueba preguntando:</p>
                 <div className="grid grid-cols-1 gap-2">
@@ -256,12 +220,12 @@ export function EnhancedChatInterface() {
             </div>
           ) : (
             <div className="space-y-6">
-              {messages.map((message) => (
+              {messages.map(message => (
                 <div
                   key={message.id}
-                  className={`flex gap-3 ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                  className={`flex gap-3 ${message.type === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  {message.type === 'assistant' && (
+                  {message.type === "assistant" && (
                     <Avatar className="w-8 h-8 bg-primary">
                       <AvatarFallback>
                         <Bot className="w-4 h-4" />
@@ -269,11 +233,11 @@ export function EnhancedChatInterface() {
                     </Avatar>
                   )}
 
-                  <Card className={`max-w-[80%] ${message.type === 'user' ? 'bg-primary text-primary-foreground' : ''}`}>
+                  <Card className={`max-w-[80%] ${message.type === "user" ? "bg-primary text-primary-foreground" : ""}`}>
                     <CardContent className="p-4">
                       <p className="text-sm whitespace-pre-wrap">{message.content}</p>
 
-                      {message.sources && (
+                      {message.sources && message.sources.length > 0 && (
                         <div className="mt-3 pt-3 border-t border-border">
                           <p className="text-xs text-muted-foreground mb-2">Fuentes:</p>
                           <div className="flex flex-wrap gap-1">
@@ -293,7 +257,7 @@ export function EnhancedChatInterface() {
                     </CardContent>
                   </Card>
 
-                  {message.type === 'user' && (
+                  {message.type === "user" && (
                     <Avatar className="w-8 h-8">
                       <AvatarFallback>
                         <User className="w-4 h-4" />
@@ -303,7 +267,7 @@ export function EnhancedChatInterface() {
                 </div>
               ))}
 
-              {isLoading && (
+              {isSending && (
                 <div className="flex gap-3">
                   <Avatar className="w-8 h-8 bg-primary">
                     <AvatarFallback>
@@ -326,23 +290,22 @@ export function EnhancedChatInterface() {
           )}
         </ScrollArea>
 
-        {/* Input Area */}
         <div className="border-t border-border p-6">
           <div className="flex gap-3">
             <Input
               value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
+              onChange={(event) => setInputValue(event.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Haz una pregunta sobre tus documentos..."
               className="flex-1"
-              disabled={isLoading}
+              disabled={isSending || isLoadingActiveSession}
             />
             <Button
               onClick={handleSendMessage}
-              disabled={!inputValue.trim() || isLoading}
+              disabled={!inputValue.trim() || isSending || isLoadingActiveSession}
               className="w-10 h-10 p-0"
             >
-              {isLoading ? (
+              {isSending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Send className="w-4 h-4" />
@@ -355,30 +318,39 @@ export function EnhancedChatInterface() {
         </div>
       </div>
 
-      {/* Session History Sidebar */}
       <div className="w-80 border-l border-border p-4 flex flex-col min-h-0">
         <h3 className="text-sm font-medium text-foreground mb-3">Sesiones Recientes</h3>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 h-full min-h-0 overflow-hidden">
           <div className="space-y-2">
-            {sessions.map((session) => (
-              <Card
-                key={session.id}
-                className={`p-3 cursor-pointer transition-colors hover:bg-muted ${session.id === currentSessionId ? 'bg-muted' : ''}`}
-                onClick={() => loadSession(session.id)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
-                      {session.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {session.timestamp.toLocaleDateString()} • {session.messageCount} mensajes
-                    </p>
+            {isLoadingSessions ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+              </div>
+            ) : sessions.length === 0 ? (
+              <div className="text-sm text-muted-foreground text-center px-4 py-8">
+                No hay conversaciones registradas todavía.
+              </div>
+            ) : (
+              sessions.map(session => (
+                <Card
+                  key={session.id}
+                  className={`p-3 cursor-pointer transition-colors hover:bg-muted ${session.id === activeSessionId ? "bg-muted" : ""}`}
+                  onClick={() => void selectSession(session.id)}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">
+                        {session.title}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {session.updatedAt.toLocaleDateString()} • {session.messageCount} mensajes
+                      </p>
+                    </div>
+                    <MessageSquare className="w-4 h-4 text-muted-foreground flex-shrink-0 ml-2" />
                   </div>
-                  <MessageSquare className="w-4 h-4 text-muted-foreground flex-shrink-0 ml-2" />
-                </div>
-              </Card>
-            ))}
+                </Card>
+              ))
+            )}
           </div>
         </ScrollArea>
       </div>

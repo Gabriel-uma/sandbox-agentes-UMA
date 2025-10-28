@@ -30,11 +30,45 @@ export interface ChatMessage {
   confidence?: number
 }
 
+export interface TokenUsage {
+  prompt_tokens?: number
+  response_tokens?: number
+  total_tokens?: number
+}
+
 export interface RAGResponse {
   answer: string
   sources: string[]
   confidence: number
   conversation_id?: string
+  metadata?: {
+    chunks_retrieved?: number
+    model_used?: string
+    latency_ms?: number | null
+    token_usage?: TokenUsage
+  }
+}
+
+export interface KnowledgeBaseAnalyticsSummary {
+  totalQueries: number
+  avgLatencyMs: number
+  avgTotalTokens: number
+  avgPromptTokens: number
+  avgResponseTokens: number
+  totalTokens: number
+}
+
+export interface KnowledgeBaseAnalytics {
+  summary: KnowledgeBaseAnalyticsSummary
+  documents: Array<{
+    documentId: string
+    queryCount: number
+  }>
+}
+
+interface SavedSettings {
+  systemPrompt?: string
+  responseLanguage?: string
 }
 
 // Configuración de URLs desde variables de entorno
@@ -133,8 +167,8 @@ class RAGService {
       const result = await response.json()
       const documentsArray = Array.isArray(result.documents) ? result.documents : []
       this.documents = documentsArray
-        .map((item: any) => this.normalizeDocument(item))
-        .sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())
+        .map((item: Document) => this.normalizeDocument(item))
+        .sort((a: Document, b: Document) => b.uploadedAt.getTime() - a.uploadedAt.getTime())
       return this.documents
     } catch (error) {
       console.error('Error fetching documents:', error)
@@ -208,6 +242,7 @@ class RAGService {
     conversationId?: string
   ): Promise<RAGResponse> {
     try {
+      const savedSettings = this.getSavedSettings()
       const response = await fetch(`${RAG_BACKEND_URL}/query`, {
         method: 'POST',
         headers: {
@@ -217,7 +252,9 @@ class RAGService {
           question,
           conversation_id: conversationId || this.currentConversationId,
           top_k: 5,
-          include_history: true
+          include_history: true,
+          system_prompt: savedSettings?.systemPrompt,
+          response_language: savedSettings?.responseLanguage
         }),
       })
 
@@ -244,12 +281,30 @@ class RAGService {
         answer: result.answer,
         sources: result.sources || [],
         confidence: result.confidence || 0.5,
-        conversation_id: result.conversation_id
+        conversation_id: result.conversation_id,
+        metadata: result.metadata
       }
 
     } catch (error) {
       console.error('Error querying documents:', error)
       throw error
+    }
+  }
+
+  private getSavedSettings(): SavedSettings | null {
+    if (typeof window === 'undefined') {
+      return null
+    }
+
+    try {
+      const stored = window.localStorage.getItem('rag-settings')
+      if (!stored) {
+        return null
+      }
+      return JSON.parse(stored) as SavedSettings
+    } catch (error) {
+      console.error('Error reading saved settings:', error)
+      return null
     }
   }
 
@@ -327,6 +382,95 @@ class RAGService {
       console.error('Error listing conversations:', error)
       return []
     }
+  }
+
+  async getKnowledgeBaseAnalytics(options: { days?: number; documentLimit?: number } = {}): Promise<KnowledgeBaseAnalytics> {
+    const defaultAnalytics: KnowledgeBaseAnalytics = {
+      summary: {
+        totalQueries: 0,
+        avgLatencyMs: 0,
+        avgTotalTokens: 0,
+        avgPromptTokens: 0,
+        avgResponseTokens: 0,
+        totalTokens: 0
+      },
+      documents: []
+    }
+
+    if (!RAG_BACKEND_URL) {
+      return defaultAnalytics
+    }
+
+    const params = new URLSearchParams()
+    if (options.days !== undefined) {
+      params.append('days', String(options.days))
+    }
+    if (options.documentLimit !== undefined) {
+      params.append('document_limit', String(options.documentLimit))
+    }
+
+    const queryString = params.toString()
+    const sanitizedBaseUrl = RAG_BACKEND_URL.replace(/\/$/, '')
+    const candidateEndpoints = [
+      `${sanitizedBaseUrl}/analytics/knowledge-base`,
+      `${sanitizedBaseUrl}/analytics/knowledge_base`
+    ]
+
+    try {
+      for (const endpoint of candidateEndpoints) {
+        const targetUrl = queryString ? `${endpoint}?${queryString}` : endpoint
+        let response: Response
+
+        try {
+          response = await fetch(targetUrl, { method: 'GET' })
+        } catch (networkError) {
+          console.error('Network error hitting knowledge base analytics:', networkError)
+          continue
+        }
+
+        if (response.ok) {
+          const result = await response.json()
+          const summary = result.summary ?? {}
+          const documents = Array.isArray(result.documents) ? result.documents : []
+
+          return {
+            summary: {
+              totalQueries: Number(summary.total_queries ?? summary.totalQueries ?? 0),
+              avgLatencyMs: Number(summary.avg_latency_ms ?? summary.avgLatencyMs ?? 0),
+              avgTotalTokens: Number(summary.avg_total_tokens ?? summary.avgTotalTokens ?? 0),
+              avgPromptTokens: Number(summary.avg_prompt_tokens ?? summary.avgPromptTokens ?? 0),
+              avgResponseTokens: Number(summary.avg_response_tokens ?? summary.avgResponseTokens ?? 0),
+              totalTokens: Number(summary.total_tokens ?? summary.totalTokens ?? 0)
+            },
+            documents: documents.map((item: any) => ({
+              documentId: item.document_id ?? item.documentId ?? '',
+              queryCount: Number(item.query_count ?? item.queryCount ?? 0)
+            })).filter((doc: { documentId: string; queryCount: number }) => doc.documentId)
+          }
+        }
+
+        if (response.status === 404) {
+          console.warn(`Knowledge base analytics endpoint not found at ${targetUrl}, trying fallback`)
+          continue
+        }
+
+        const contentType = response.headers.get('content-type')
+
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json()
+          throw new Error(error.error || 'Error fetching knowledge base analytics')
+        }
+
+        throw new Error(`Error ${response.status}: ${response.statusText}`)
+      }
+
+    } catch (error) {
+      console.error('Error fetching knowledge base analytics:', error)
+      return defaultAnalytics
+    }
+
+    console.warn('Knowledge base analytics unavailable, returning defaults')
+    return defaultAnalytics
   }
 
   /**
@@ -422,7 +566,7 @@ class RAGService {
   }
 
   // Métodos de compatibilidad con la interfaz anterior
-  addMessage(message: ChatMessage): void {
+  addMessage(_message: ChatMessage): void {
     // No-op: Los mensajes ahora se guardan automáticamente en BigQuery
     console.log('Message will be saved in BigQuery automatically')
   }

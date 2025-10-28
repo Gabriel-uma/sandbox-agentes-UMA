@@ -9,6 +9,7 @@ import tempfile
 from datetime import datetime, timezone
 from io import BytesIO
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import logging
 
@@ -24,6 +25,23 @@ logger = logging.getLogger(__name__)
 # Inicializar Flask
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max
+
+# Configurar CORS para permitir requests desde Vercel
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://agente-weekly-4uyn5bksr-rgabrielrs-projects.vercel.app",
+            "https://*.vercel.app",
+            "http://localhost:5173",
+            "http://localhost:3000"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }
+})
 
 # Inicializar servicios
 try:
@@ -123,19 +141,20 @@ def upload_document():
                 chunks
             )
 
+            # Indexación opcional - si falla por cuota, el documento igual se guarda
+            indexed = False
+            index_error = None
+
             logger.info("Updating Matching Engine index with new embeddings")
             try:
                 index_manager.import_embeddings(embeddings_uri)
+                indexed = True
+                logger.info("Document successfully indexed in Matching Engine")
             except Exception as exc:
-                logger.error("Failed to update index with embeddings: %s", exc, exc_info=True)
-                try:
-                    storage_manager.delete_document(document_id)
-                except Exception as cleanup_exc:
-                    logger.warning("Failed to rollback storage for %s: %s", document_id, cleanup_exc)
-                return jsonify({
-                    'error': 'Failed to index document in Matching Engine',
-                    'details': str(exc)
-                }), 500
+                logger.warning("Failed to update index with embeddings (document still saved): %s", exc)
+                index_error = str(exc)
+                # No hacemos rollback - el documento se guardó exitosamente
+                # La indexación puede hacerse después manualmente si es necesario
 
             file_size = os.path.getsize(temp_path)
             uploaded_at = datetime.now(timezone.utc).isoformat()
@@ -147,7 +166,8 @@ def upload_document():
                 'mime_type': file.mimetype,
                 'size': file_size,
                 'uploaded_at': uploaded_at,
-                'status': 'ready',
+                'status': 'ready' if indexed else 'indexed_pending',
+                'indexed': indexed,
                 'total_chunks': len(chunks),
                 'total_characters': len(text),
                 'uris': {
@@ -157,24 +177,31 @@ def upload_document():
                 }
             }
 
+            if index_error:
+                metadata['index_error'] = index_error
+
             metadata_uri = storage_manager.save_document_metadata(document_id, metadata)
             metadata['uris']['metadata'] = metadata_uri
 
             response = {
-                'status': 'ready',
+                'status': 'ready' if indexed else 'indexed_pending',
                 'document_id': document_id,
                 'filename': filename,
                 'document_type': doc_type,
                 'mime_type': file.mimetype,
                 'size': file_size,
                 'uploaded_at': uploaded_at,
+                'indexed': indexed,
                 'total_chunks': len(chunks),
                 'total_characters': len(text),
-                'message': 'Document processed and indexed successfully',
+                'message': 'Document processed and indexed successfully' if indexed else 'Document processed but indexing pending (quota limit)',
                 'uris': metadata['uris']
             }
 
-            logger.info(f"Document {document_id} processed successfully")
+            if index_error:
+                response['index_warning'] = 'Indexing delayed due to quota limits. Document saved and will be searchable once indexed.'
+
+            logger.info(f"Document {document_id} processed successfully (indexed={indexed})")
             return jsonify(response), 200
 
         finally:
@@ -258,6 +285,56 @@ def download_document(document_id):
     except Exception as e:
         logger.error(f"Error generating download: {str(e)}", exc_info=True)
         return jsonify({'error': 'Failed to download document', 'details': str(e)}), 500
+
+
+@app.route('/documents/<document_id>/reindex', methods=['POST'])
+def reindex_document(document_id):
+    """Reindexa un documento que falló en la indexación inicial"""
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
+
+    try:
+        logger.info(f"Reindexing document {document_id}")
+
+        # Obtener metadata del documento
+        metadata = storage_manager.get_document_metadata(document_id)
+        if not metadata:
+            return jsonify({'error': 'Document not found'}), 404
+
+        # Verificar que tenga embeddings URI
+        embeddings_uri = metadata.get('uris', {}).get('embeddings')
+        if not embeddings_uri:
+            return jsonify({'error': 'Document embeddings not found'}), 404
+
+        # Intentar indexar
+        try:
+            index_manager.import_embeddings(embeddings_uri)
+            logger.info(f"Document {document_id} reindexed successfully")
+
+            # Actualizar metadata
+            metadata['status'] = 'ready'
+            metadata['indexed'] = True
+            if 'index_error' in metadata:
+                del metadata['index_error']
+
+            storage_manager.save_document_metadata(document_id, metadata)
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Document reindexed successfully',
+                'document_id': document_id
+            }), 200
+
+        except Exception as exc:
+            logger.error(f"Failed to reindex document {document_id}: {str(exc)}")
+            return jsonify({
+                'error': 'Failed to reindex document',
+                'details': str(exc)
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error reindexing document: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
 
 @app.errorhandler(413)

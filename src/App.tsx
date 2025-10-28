@@ -1,26 +1,21 @@
-import { ThemeProvider } from '@/components/theme-provider'
-import { NavigationProvider } from '@/context/navigation-context'
-import { Sidebar } from '@/components/sidebar'
-import { MainContent } from '@/components/main-content'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import AgentsShowcase from '@/pages/agents-showcase'
+import ChatRagAgent from '@/agents/chatrag'
+import SmartAuditAgent from '@/agents/smartaudit'
+import PreDocAgent from '@/agents/predoc'
+import EscribaAgent from '@/pages/escriba'
 
 function App() {
   return (
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="system"
-      enableSystem
-      disableTransitionOnChange
-    >
-      <NavigationProvider>
-        <div className="flex h-screen bg-background">
-          {/* Left Sidebar */}
-          <Sidebar />
-
-          {/* Main Content */}
-          <MainContent />
-        </div>
-      </NavigationProvider>
-    </ThemeProvider>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<AgentsShowcase />} />
+        <Route path="/agents/chatrag" element={<ChatRagAgent />} />
+        <Route path="/agents/smartaudit" element={<SmartAuditAgent />} />
+        <Route path="/agents/predoc" element={<PreDocAgent />} />
+        <Route path="/agents/escriba" element={<EscribaAgent />} />
+      </Routes>
+    </BrowserRouter>
   )
 }
 

@@ -1,12 +1,9 @@
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   MessageSquare,
-  FolderOpen,
   FileText,
   BookOpen,
-  Users,
   History,
   Settings,
   HelpCircle,

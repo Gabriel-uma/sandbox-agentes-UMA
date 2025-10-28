@@ -500,11 +500,11 @@ export function DocumentsSection() {
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-sm font-medium text-foreground truncate">
+                        <div className="flex flex-col gap-1 mb-1 sm:flex-row sm:items-center sm:gap-2 sm:justify-between">
+                          <p className="w-full text-sm font-medium text-foreground truncate sm:flex-1 sm:min-w-0">
                             {doc.name}
                           </p>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 sm:flex-shrink-0">
                             {doc.indexed && (
                               <Badge variant="default" className="text-xs">
                                 Indexado

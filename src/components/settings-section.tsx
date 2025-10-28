@@ -2,7 +2,6 @@ import { useState, useEffect } from "react"
 import { ragService } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
@@ -30,8 +29,6 @@ import {
   Save,
   RotateCcw,
   TestTube,
-  Zap,
-  Globe,
   Lock,
   CheckCircle,
   XCircle
@@ -182,7 +179,7 @@ export function SettingsSection() {
       await checkBackendStatus()
 
       if (backendStatus.ragBackend) {
-        const testQuery = await ragService.queryDocuments("Prueba de configuración")
+        await ragService.queryDocuments("Prueba de configuración")
         toast({
           title: "Prueba exitosa",
           description: "La configuración está funcionando correctamente",

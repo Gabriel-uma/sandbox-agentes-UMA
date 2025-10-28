@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { ragService } from "@/lib/rag-service"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -43,68 +43,70 @@ interface ChatSession {
 
 export function ChatHistorySection() {
   const [searchTerm, setSearchTerm] = useState("")
-  const [selectedSession, setSelectedSession] = useState<ChatSession | null>(null)
   const [filterDate, setFilterDate] = useState("")
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    loadChatHistory()
-  }, [])
-
-  const loadChatHistory = () => {
+  const loadChatHistory = useCallback(async () => {
     setIsLoading(true)
     try {
-      const history = ragService.getChatHistory()
+      const conversations = await ragService.listConversations(100)
 
-      // Convert chat history to ChatSession format
-      const sessions: ChatSession[] = history.map(msg => {
-        const messages: ChatMessage[] = [{
-          id: msg.id,
-          type: msg.type,
-          content: msg.content,
-          timestamp: msg.timestamp,
-          sources: msg.sources
-        }]
+      const sessions: ChatSession[] = await Promise.all(
+        conversations.map(async (conversation: any) => {
+          const conversationId = conversation.conversation_id
+          const history = await ragService.getConversationHistory(conversationId)
 
-        return {
-          id: msg.sessionId || msg.id,
-          title: msg.content.substring(0, 50) + (msg.content.length > 50 ? '...' : ''),
-          startTime: msg.timestamp,
-          endTime: msg.timestamp,
-          messageCount: 1,
-          duration: 0,
-          messages: messages,
-          topics: msg.sources || []
-        }
-      })
+          const messages = history
+            .map(msg => ({
+              ...msg,
+              timestamp: msg.timestamp instanceof Date ? msg.timestamp : new Date(msg.timestamp)
+            }))
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
 
-      // Group messages by sessionId
-      const groupedSessions = new Map<string, ChatSession>()
+          const startTime = messages[0]?.timestamp || (conversation.last_message_time ? new Date(conversation.last_message_time) : new Date())
+          const endTime = messages[messages.length - 1]?.timestamp || startTime
+          const duration = Math.max(0, Math.round((endTime.getTime() - startTime.getTime()) / 60000))
 
-      sessions.forEach(session => {
-        const sessionId = session.id
-        if (groupedSessions.has(sessionId)) {
-          const existing = groupedSessions.get(sessionId)!
-          existing.messages.push(...session.messages)
-          existing.messageCount = existing.messages.length
-          existing.endTime = session.endTime
-          const durationMs = existing.endTime.getTime() - existing.startTime.getTime()
-          existing.duration = Math.floor(durationMs / 60000) // Convert to minutes
-        } else {
-          groupedSessions.set(sessionId, session)
-        }
-      })
+          const titleSource =
+            messages.find(msg => msg.type === 'user')?.content ||
+            messages[0]?.content ||
+            `Conversación ${startTime.toLocaleString()}`
+          const title = titleSource.length > 60 ? `${titleSource.slice(0, 60)}…` : titleSource
 
-      setChatSessions(Array.from(groupedSessions.values()).sort((a, b) =>
-        b.startTime.getTime() - a.startTime.getTime()
-      ))
+          const topics = Array.from(
+            new Set(
+              messages.flatMap(msg => msg.sources || [])
+            )
+          )
+
+          return {
+            id: conversationId,
+            title,
+            startTime,
+            endTime,
+            messageCount: messages.length || Number(conversation.message_count ?? 0),
+            duration,
+            messages,
+            topics
+          }
+        })
+      )
+
+      setChatSessions(
+        sessions.sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
+      )
     } catch (error) {
       console.error("Error loading chat history:", error)
+      setChatSessions([])
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    loadChatHistory()
+  }, [loadChatHistory])
 
   const filteredSessions = chatSessions.filter(session => {
     const matchesSearch = session.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -135,14 +137,30 @@ export function ChatHistorySection() {
     URL.revokeObjectURL(url)
   }
 
-  const deleteSession = (sessionId: string) => {
-    setChatSessions(prev => prev.filter(session => session.id !== sessionId))
-  }
+  const deleteSession = useCallback(async (sessionId: string) => {
+    const success = await ragService.deleteConversation(sessionId)
+    if (success) {
+      setChatSessions(prev => prev.filter(session => session.id !== sessionId))
+      await loadChatHistory()
+    }
+  }, [loadChatHistory])
 
-  const clearAllHistory = () => {
-    ragService.clearChatHistory()
-    setChatSessions([])
-  }
+  const clearAllHistory = useCallback(async () => {
+    if (chatSessions.length === 0) {
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      await Promise.all(chatSessions.map(session => ragService.deleteConversation(session.id)))
+      await loadChatHistory()
+    } catch (error) {
+      console.error("Error clearing chat history:", error)
+      setChatSessions([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [chatSessions, loadChatHistory])
 
   const formatDuration = (minutes: number) => {
     if (minutes < 60) {
@@ -168,7 +186,7 @@ export function ChatHistorySection() {
             Revisa y gestiona todas tus conversaciones pasadas
           </p>
         </div>
-        <Button variant="destructive" onClick={clearAllHistory}>
+        <Button variant="destructive" onClick={() => void clearAllHistory()} disabled={isLoading || chatSessions.length === 0}>
           <Trash2 className="w-4 h-4 mr-2" />
           Limpiar Todo el Historial
         </Button>
@@ -345,7 +363,7 @@ export function ChatHistorySection() {
                           Exportar
                         </Button>
 
-                        <Button variant="ghost" size="sm" onClick={() => deleteSession(session.id)}>
+                        <Button variant="ghost" size="sm" onClick={() => void deleteSession(session.id)}>
                           <Trash2 className="w-4 h-4 mr-2" />
                           Eliminar
                         </Button>
