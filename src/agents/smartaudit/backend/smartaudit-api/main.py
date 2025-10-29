@@ -7,15 +7,11 @@ import os
 
 app = FastAPI(title="SmartAudit API", version="1.0.0")
 
-# Configurar CORS
+# Configurar CORS - Permitir todos los orígenes (acceso público)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://agente-weekly-ai.vercel.app",
-        "http://localhost:5173",
-        "http://localhost:3000"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Permitir todos los orígenes
+    allow_credentials=False,  # Debe ser False cuando allow_origins es ["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )

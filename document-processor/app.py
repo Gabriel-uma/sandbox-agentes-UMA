@@ -29,16 +29,11 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max
 # Configurar CORS para permitir requests desde Vercel
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "https://agente-weekly-4uyn5bksr-rgabrielrs-projects.vercel.app",
-            "https://*.vercel.app",
-            "http://localhost:5173",
-            "http://localhost:3000"
-        ],
+        "origins": "*",  # Permitir todos los orígenes (acceso público)
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "expose_headers": ["Content-Type"],
-        "supports_credentials": True,
+        "supports_credentials": False,  # Cambiar a False cuando origins es "*"
         "max_age": 3600
     }
 })
