@@ -109,22 +109,7 @@ export function DocumentUpload() {
         f.id === fileId ? { ...f, status: 'processed', progress: 100 } : f
       ))
 
-      // Check if document was uploaded but indexing is pending
-      if (uploadedDoc.indexed === false || uploadedDoc.status === 'indexed_pending') {
-        console.log('Document uploaded but indexing pending:', uploadedDoc)
-        setFiles(prev => prev.map(f =>
-          f.id === fileId
-            ? {
-                ...f,
-                status: 'processed',
-                progress: 100,
-                errorMessage: '⚠️ Documento guardado. Indexación pendiente por límite de cuota.'
-              }
-            : f
-        ))
-      } else {
-        console.log('Document uploaded successfully:', uploadedDoc)
-      }
+      console.log('Document uploaded successfully:', uploadedDoc)
     } catch (error) {
       // Clear progress interval on error
       if (progressInterval) clearInterval(progressInterval)

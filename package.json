@@ -59,6 +59,7 @@
     "zod": "3.25.67"
   },
   "devDependencies": {
+    "@types/node": "^24.9.2",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@typescript-eslint/eslint-plugin": "^7.2.0",
