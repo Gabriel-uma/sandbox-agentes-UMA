@@ -74,3 +74,5 @@ cloud-build.log
 error.log
 *-build.log
 *.tar.gz
+
+.vercel
