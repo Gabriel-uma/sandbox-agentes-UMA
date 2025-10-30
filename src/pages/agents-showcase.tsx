@@ -91,7 +91,7 @@ export default function AgentsShowcase() {
           {/* Main Title */}
           <div className="text-center pb-4 ">
             <h1 className="cursor-default text-5xl lg:text-6xl font-bold bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 bg-clip-text text-transparent tracking-tight pb-4">
-              Fábrica de agentes Uma
+             Sandbox de agentes Uma
             </h1>
           </div>
 
