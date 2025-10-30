@@ -1,43 +1,47 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
+# Dependencies
 /node_modules
+pnpm-lock.yaml
 
-# next.js
+# Next.js (not used but keep for safety)
 /.next/
 /out/
 
-# production
+# Production builds
 /build
+/dist
+dist-ssr
 
-# debug
+# Debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
-.env*
+# Environment files
+.env
+.env.local
+.env*.local
+!.env.example
+!.env.production.example
 
-# vercel
+# Vercel
 .vercel
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
-# local tooling
+
+# Local tooling
 /.claude/
 
-nul
-.vercel
-
 # Vite
-dist
-dist-ssr
 *.local
 
 # Temp extraction folders
 temp-extract/
+buckets/
 
 # Python
 __pycache__/
@@ -58,21 +62,31 @@ ENV/
 # Archives
 *.zip
 *.tar.gz
+*.tgz
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Project specific
 project/
-build.log
-cloud-build.log
-error.log
 *-build.log
-*.tar.gz
+nul
 
-.vercel
+# Terraform (sensitive files)
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Test files
+test-*.json
