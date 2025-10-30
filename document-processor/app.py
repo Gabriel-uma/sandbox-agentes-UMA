@@ -27,16 +27,15 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max
 
 # Configurar CORS para permitir requests desde Vercel
-CORS(app, resources={
-    r"/*": {
-        "origins": "*",  # Permitir todos los orígenes (acceso público)
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "expose_headers": ["Content-Type"],
-        "supports_credentials": False,  # Cambiar a False cuando origins es "*"
-        "max_age": 3600
-    }
-})
+CORS(app,
+     origins="*",
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     expose_headers=["Content-Type"],
+     supports_credentials=False,
+     max_age=3600,
+     send_wildcard=True,
+     always_send=True)
 
 # Inicializar servicios
 try:
