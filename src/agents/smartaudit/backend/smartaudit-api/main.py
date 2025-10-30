@@ -10,10 +10,11 @@ app = FastAPI(title="SmartAudit API", version="1.0.0")
 # Configurar CORS - Permitir todos los orígenes (acceso público)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permitir todos los orígenes
-    allow_credentials=False,  # Debe ser False cuando allow_origins es ["*"]
-    allow_methods=["*"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"],
     allow_headers=["*"],
+    max_age=3600,
 )
 
 # ==================== MODELOS ====================

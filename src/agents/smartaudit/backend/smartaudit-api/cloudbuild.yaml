@@ -1,40 +1,15 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-central1-docker.pkg.dev/uma-tech-ai-lab/smartaudit-repo/smartaudit-api:latest', '.']
+    args: ['build', '-t', 'gcr.io/uma-tech-ai-lab/smartaudit-api:latest', '.']
 
-  # Push the container image to Artifact Registry
+  # Push the container image to GCR
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/uma-tech-ai-lab/smartaudit-repo/smartaudit-api:latest']
-
-  # Deploy container image to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'smartaudit-api'
-      - '--image'
-      - 'us-central1-docker.pkg.dev/uma-tech-ai-lab/smartaudit-repo/smartaudit-api:latest'
-      - '--region'
-      - 'us-central1'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
-      - '--max-instances'
-      - '1'
-      - '--memory'
-      - '512Mi'
-      - '--cpu'
-      - '1'
-      - '--min-instances'
-      - '0'
-      - '--timeout'
-      - '300'
+    args: ['push', 'gcr.io/uma-tech-ai-lab/smartaudit-api:latest']
 
 images:
-  - 'us-central1-docker.pkg.dev/uma-tech-ai-lab/smartaudit-repo/smartaudit-api:latest'
+  - 'gcr.io/uma-tech-ai-lab/smartaudit-api:latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY
-serviceAccount: projects/uma-tech-ai-lab/serviceAccounts/smartaudit-sa@uma-tech-ai-lab.iam.gserviceaccount.com
+serviceAccount: projects/uma-tech-ai-lab/serviceAccounts/117511395113-compute@developer.gserviceaccount.com
