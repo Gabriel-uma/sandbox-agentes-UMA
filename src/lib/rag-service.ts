@@ -1,7 +1,7 @@
 // RAG Service - Cliente real para servicios backend en GCP
 // Conecta con Document Processor y RAG Backend en Cloud Run
 
-export type DocumentStatus = 'uploading' | 'processing' | 'ready' | 'error'
+export type DocumentStatus = 'uploading' | 'processing' | 'indexing' | 'ready' | 'index_failed' | 'error'
 
 export interface Document {
   id: string
@@ -223,6 +223,43 @@ class RAGService {
     } catch (error) {
       console.error('Error downloading document:', error)
       const message = error instanceof Error ? error : new Error('Error downloading document')
+      throw message
+    }
+  }
+
+  /**
+   * Consulta el estado de indexación de un documento
+   */
+  async checkDocumentStatus(documentId: string): Promise<{ status: DocumentStatus; indexed: boolean; filename: string }> {
+    try {
+      const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/documents/${documentId}/status`, {
+        method: 'GET',
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+
+      // Update local document if it exists
+      const docIndex = this.documents.findIndex(doc => doc.id === documentId)
+      if (docIndex >= 0) {
+        this.documents[docIndex] = {
+          ...this.documents[docIndex],
+          status: result.status as DocumentStatus,
+        }
+      }
+
+      return {
+        status: result.status as DocumentStatus,
+        indexed: result.indexed ?? false,
+        filename: result.filename ?? ''
+      }
+    } catch (error) {
+      console.error('Error checking document status:', error)
+      const message = error instanceof Error ? error : new Error('Error checking document status')
       throw message
     }
   }

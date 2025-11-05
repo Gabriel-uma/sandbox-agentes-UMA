@@ -135,23 +135,82 @@ def upload_document():
                 chunks
             )
 
-            # Indexación opcional - si falla por cuota, el documento igual se guarda
-            indexed = False
-            index_error = None
-
-            logger.info("Updating Matching Engine index with new embeddings")
-            try:
-                index_manager.import_embeddings(embeddings_uri)
-                indexed = True
-                logger.info("Document successfully indexed in Matching Engine")
-            except Exception as exc:
-                logger.warning("Failed to update index with embeddings (document still saved): %s", exc)
-                index_error = str(exc)
-                # No hacemos rollback - el documento se guardó exitosamente
-                # La indexación puede hacerse después manualmente si es necesario
-
             file_size = os.path.getsize(temp_path)
             uploaded_at = datetime.now(timezone.utc).isoformat()
+
+            # File size threshold for hybrid mode: 5MB
+            FILE_SIZE_THRESHOLD = 5 * 1024 * 1024  # 5MB
+            use_async = file_size >= FILE_SIZE_THRESHOLD
+
+            # Indexación con modo híbrido: sync para archivos pequeños, async para grandes
+            indexed = False
+            index_error = None
+            indexing_status = "indexing" if use_async else "processing"
+
+            logger.info(
+                "Updating Matching Engine index with new embeddings (async=%s, size=%d bytes)",
+                use_async,
+                file_size
+            )
+
+            if use_async:
+                # Para archivos grandes: usar modo asíncrono con callback
+                def on_indexing_complete(success: bool, error_msg: str = None):
+                    """Callback que se ejecuta cuando termina la indexación asíncrona"""
+                    try:
+                        # Recuperar y actualizar metadatos
+                        current_metadata = storage_manager.get_document_metadata(document_id)
+                        if current_metadata:
+                            current_metadata['indexed'] = success
+                            current_metadata['status'] = 'ready' if success else 'index_failed'
+                            if error_msg:
+                                current_metadata['index_error'] = error_msg
+                            elif 'index_error' in current_metadata:
+                                del current_metadata['index_error']
+
+                            storage_manager.save_document_metadata(document_id, current_metadata)
+                            logger.info(
+                                "Document %s indexing completed: success=%s",
+                                document_id,
+                                success
+                            )
+                        else:
+                            logger.error(
+                                "Could not update metadata for document %s after indexing",
+                                document_id
+                            )
+                    except Exception as callback_error:
+                        logger.error(
+                            "Error updating document %s metadata after indexing: %s",
+                            document_id,
+                            str(callback_error)
+                        )
+
+                try:
+                    index_manager.import_embeddings(
+                        embeddings_uri,
+                        async_mode=True,
+                        on_complete=on_indexing_complete
+                    )
+                    indexed = False  # Still indexing in background
+                    indexing_status = "indexing"
+                    logger.info("Document indexing started in background for large file")
+                except Exception as exc:
+                    logger.warning("Failed to start background indexing: %s", exc)
+                    index_error = str(exc)
+                    indexing_status = "index_failed"
+
+            else:
+                # Para archivos pequeños: usar modo síncrono (bloquear hasta que termine)
+                try:
+                    index_manager.import_embeddings(embeddings_uri, async_mode=False)
+                    indexed = True
+                    indexing_status = "ready"
+                    logger.info("Document successfully indexed synchronously")
+                except Exception as exc:
+                    logger.warning("Failed to index document synchronously: %s", exc)
+                    index_error = str(exc)
+                    indexing_status = "index_failed"
 
             metadata = {
                 'document_id': document_id,
@@ -160,7 +219,7 @@ def upload_document():
                 'mime_type': file.mimetype,
                 'size': file_size,
                 'uploaded_at': uploaded_at,
-                'status': 'ready' if indexed else 'indexed_pending',
+                'status': indexing_status,
                 'indexed': indexed,
                 'total_chunks': len(chunks),
                 'total_characters': len(text),
@@ -177,8 +236,18 @@ def upload_document():
             metadata_uri = storage_manager.save_document_metadata(document_id, metadata)
             metadata['uris']['metadata'] = metadata_uri
 
+            # Build response message based on status
+            if indexing_status == "ready":
+                message = "Document processed and indexed successfully"
+            elif indexing_status == "indexing":
+                message = "Document processed. Indexing in progress (large file)"
+            elif indexing_status == "index_failed":
+                message = "Document processed but indexing failed"
+            else:
+                message = "Document processing completed"
+
             response = {
-                'status': 'ready' if indexed else 'indexed_pending',
+                'status': indexing_status,
                 'document_id': document_id,
                 'filename': filename,
                 'document_type': doc_type,
@@ -188,12 +257,12 @@ def upload_document():
                 'indexed': indexed,
                 'total_chunks': len(chunks),
                 'total_characters': len(text),
-                'message': 'Document processed and indexed successfully' if indexed else 'Document processed but indexing pending (quota limit)',
+                'message': message,
                 'uris': metadata['uris']
             }
 
             if index_error:
-                response['index_warning'] = 'Indexing delayed due to quota limits. Document saved and will be searchable once indexed.'
+                response['index_error'] = index_error
 
             logger.info(f"Document {document_id} processed successfully (indexed={indexed})")
             return jsonify(response), 200
@@ -246,6 +315,36 @@ def get_document_info(document_id):
     except Exception as e:
         logger.error(f"Error retrieving document info: {str(e)}", exc_info=True)
         return jsonify({'error': 'Failed to retrieve document info', 'details': str(e)}), 500
+
+
+@app.route('/documents/<document_id>/status', methods=['GET'])
+def get_document_status(document_id):
+    """Consulta el estado de indexación de un documento específico."""
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
+
+    try:
+        metadata = storage_manager.get_document_metadata(document_id)
+        if not metadata:
+            return jsonify({'error': 'Document not found'}), 404
+
+        # Return minimal status information for polling
+        status_info = {
+            'document_id': document_id,
+            'status': metadata.get('status', 'unknown'),
+            'indexed': metadata.get('indexed', False),
+            'filename': metadata.get('filename', ''),
+        }
+
+        # Include error if present
+        if 'index_error' in metadata:
+            status_info['index_error'] = metadata['index_error']
+
+        return jsonify(status_info), 200
+
+    except Exception as e:
+        logger.error(f"Error checking document status: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to check document status', 'details': str(e)}), 500
 
 
 @app.route('/documents/<document_id>', methods=['DELETE'])

@@ -56,14 +56,19 @@ export function DocumentsSection() {
       const baseProgress: Record<DocumentStatus, number> = {
         uploading: 30,
         processing: 60,
+        indexing: 85,
         ready: 100,
+        index_failed: 100,
         error: 0,
       }
+
+      // Determine if document is truly indexed
+      const isIndexed = document.status === 'ready' && Boolean((document.totalChunks ?? 0) > 0)
 
       const merged = {
         ...document,
         progress: extras.progress ?? baseProgress[document.status ?? "ready"],
-        indexed: extras.indexed ?? Boolean((document.totalChunks ?? 0) > 0),
+        indexed: extras.indexed ?? isIndexed,
       }
 
       return { ...merged, ...extras }
@@ -90,6 +95,43 @@ export function DocumentsSection() {
   useEffect(() => {
     void loadDocuments()
   }, [loadDocuments])
+
+  // Polling effect for documents that are still indexing
+  useEffect(() => {
+    const indexingDocs = documents.filter(doc => doc.status === 'indexing')
+
+    if (indexingDocs.length === 0) {
+      return
+    }
+
+    const pollInterval = setInterval(async () => {
+      for (const doc of indexingDocs) {
+        try {
+          const statusResult = await ragService.checkDocumentStatus(doc.id)
+
+          // Update document status if it changed
+          if (statusResult.status !== 'indexing') {
+            setDocuments(prev =>
+              prev.map(d =>
+                d.id === doc.id
+                  ? {
+                      ...d,
+                      status: statusResult.status,
+                      indexed: statusResult.indexed,
+                      progress: statusResult.status === 'ready' ? 100 : d.progress,
+                    }
+                  : d
+              )
+            )
+          }
+        } catch (error) {
+          console.error(`Error polling status for document ${doc.id}:`, error)
+        }
+      }
+    }, 3000) // Poll every 3 seconds
+
+    return () => clearInterval(pollInterval)
+  }, [documents])
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -165,13 +207,16 @@ export function DocumentsSection() {
 
       const backendDocument = await ragService.uploadDocument(file)
 
+      // Don't mark as indexed if still indexing
+      const isIndexed = backendDocument.status === 'ready'
+
       setDocuments((prev) =>
         prev.map((doc) =>
           doc.id === provisionalId
             ? toUploadedDocument(backendDocument, {
                 status: backendDocument.status,
-                progress: 100,
-                indexed: true,
+                progress: backendDocument.status === 'ready' ? 100 : 85,
+                indexed: isIndexed,
               })
             : doc
         )
@@ -296,7 +341,7 @@ export function DocumentsSection() {
 
   const totalSize = documents.reduce((acc, doc) => acc + (doc.size ?? 0), 0)
   const readyDocuments = documents.filter((doc) => doc.status === "ready").length
-  const processingDocuments = documents.filter((doc) => doc.status === "processing" || doc.status === "uploading").length
+  const processingDocuments = documents.filter((doc) => doc.status === "processing" || doc.status === "uploading" || doc.status === "indexing").length
 
   return (
     <div className="h-full flex flex-col p-6 overflow-hidden">
@@ -514,7 +559,7 @@ export function DocumentsSection() {
                               variant={
                                 doc.status === 'ready'
                                   ? 'default'
-                                  : doc.status === 'error'
+                                  : doc.status === 'error' || doc.status === 'index_failed'
                                   ? 'destructive'
                                   : 'secondary'
                               }
@@ -523,8 +568,12 @@ export function DocumentsSection() {
                                 ? 'Subiendo'
                                 : doc.status === 'processing'
                                 ? 'Procesando'
+                                : doc.status === 'indexing'
+                                ? 'Indexando'
                                 : doc.status === 'ready'
                                 ? 'Listo'
+                                : doc.status === 'index_failed'
+                                ? 'Indexación falló'
                                 : 'Error'}
                             </Badge>
                           </div>
@@ -537,7 +586,7 @@ export function DocumentsSection() {
                           </span>
                         </div>
 
-                        {(doc.status === 'uploading' || doc.status === 'processing') && (
+                        {(doc.status === 'uploading' || doc.status === 'processing' || doc.status === 'indexing') && (
                           <Progress value={doc.progress ?? 0} className="mt-2 h-1" />
                         )}
                       </div>

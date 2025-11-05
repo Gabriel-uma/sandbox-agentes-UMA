@@ -5,7 +5,7 @@ import logging
 import os
 import time
 import threading
-from typing import Optional
+from typing import Optional, Callable
 from google.cloud import aiplatform
 from google.api_core import exceptions as google_exceptions
 from google.api_core import retry
@@ -42,9 +42,19 @@ class IndexManager:
         directory: str,
         complete_overwrite: bool,
         max_retries: int,
-        initial_delay: float
+        initial_delay: float,
+        on_complete: Optional[Callable[[bool, Optional[str]], None]] = None
     ) -> None:
-        """Internal method that performs the actual sync embedding import with retries."""
+        """Internal method that performs the actual sync embedding import with retries.
+
+        Args:
+            directory: GCS directory containing embeddings
+            complete_overwrite: Whether to overwrite the entire index
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay for exponential backoff
+            on_complete: Optional callback function called when indexing completes.
+                        Receives (success: bool, error_message: Optional[str])
+        """
         last_error: Optional[Exception] = None
         delay = initial_delay
 
@@ -55,6 +65,14 @@ class IndexManager:
                     is_complete_overwrite=complete_overwrite
                 )
                 logger.info("Successfully completed index update for %s", self.index_resource)
+
+                # Call callback on success
+                if on_complete:
+                    try:
+                        on_complete(True, None)
+                    except Exception as callback_error:
+                        logger.error("Error in indexing completion callback: %s", str(callback_error))
+
                 return
 
             except google_exceptions.ResourceExhausted as e:
@@ -80,17 +98,43 @@ class IndexManager:
                             max_retries + 1,
                             error_msg
                         )
-                        return  # Don't raise in background thread
+                        # Call callback on failure
+                        if on_complete:
+                            try:
+                                on_complete(False, error_msg)
+                            except Exception as callback_error:
+                                logger.error("Error in indexing completion callback: %s", str(callback_error))
+                        return
                 else:
                     logger.error("ResourceExhausted error (non-quota): %s", error_msg)
+                    # Call callback on failure
+                    if on_complete:
+                        try:
+                            on_complete(False, error_msg)
+                        except Exception as callback_error:
+                            logger.error("Error in indexing completion callback: %s", str(callback_error))
                     return
 
             except Exception as e:
-                logger.error("Failed to update index in background: %s", str(e))
+                error_msg = str(e)
+                logger.error("Failed to update index in background: %s", error_msg)
+                # Call callback on failure
+                if on_complete:
+                    try:
+                        on_complete(False, error_msg)
+                    except Exception as callback_error:
+                        logger.error("Error in indexing completion callback: %s", str(callback_error))
                 return
 
         if last_error:
-            logger.error("Background indexing failed after all retries: %s", str(last_error))
+            error_msg = str(last_error)
+            logger.error("Background indexing failed after all retries: %s", error_msg)
+            # Call callback on final failure
+            if on_complete:
+                try:
+                    on_complete(False, error_msg)
+                except Exception as callback_error:
+                    logger.error("Error in indexing completion callback: %s", str(callback_error))
 
     def import_embeddings(
         self,
@@ -99,7 +143,8 @@ class IndexManager:
         complete_overwrite: bool = False,
         max_retries: int = 5,
         initial_delay: float = 2.0,
-        async_mode: bool = True
+        async_mode: bool = True,
+        on_complete: Optional[Callable[[bool, Optional[str]], None]] = None
     ) -> None:
         """
         Triggers an embeddings update using the JSONL stored at the provided GCS URI.
@@ -113,6 +158,8 @@ class IndexManager:
             max_retries: Maximum number of retry attempts for quota errors
             initial_delay: Initial delay in seconds before first retry
             async_mode: If True, runs indexing in background thread (default: True)
+            on_complete: Optional callback called when indexing completes (async mode only).
+                        Receives (success: bool, error_message: Optional[str])
         """
         directory = self._extract_directory(embeddings_uri)
         logger.info(
@@ -127,13 +174,14 @@ class IndexManager:
             # Run indexing in background thread to avoid blocking HTTP response
             thread = threading.Thread(
                 target=self._do_import_embeddings_sync,
-                args=(directory, complete_overwrite, max_retries, initial_delay),
+                args=(directory, complete_overwrite, max_retries, initial_delay, on_complete),
                 daemon=True
             )
             thread.start()
             logger.info("Indexing started in background thread for %s", self.index_resource)
         else:
             # Run synchronously (for testing or when immediate result is needed)
+            # Note: on_complete callback is ignored in sync mode since caller gets immediate result
             self._do_import_embeddings_sync(directory, complete_overwrite, max_retries, initial_delay)
 
     @staticmethod
