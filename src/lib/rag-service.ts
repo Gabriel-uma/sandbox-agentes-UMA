@@ -78,6 +78,19 @@ const RAG_BACKEND_URL = import.meta.env.VITE_RAG_BACKEND_URL || ''
 class RAGService {
   private documents: Document[] = []
   private currentConversationId: string | null = null
+
+  // Request deduplication and caching
+  private documentsFetchPromise: Promise<Document[]> | null = null
+  private lastDocumentsFetch: number = 0
+  private conversationsCache: any[] = []
+  private conversationsListPromise: Promise<any[]> | null = null
+  private lastConversationsList: number = 0
+  private lastConversationsLimit: number = 0
+  private analyticsCache: KnowledgeBaseAnalytics | null = null
+  private analyticsPromise: Promise<KnowledgeBaseAnalytics> | null = null
+  private lastAnalyticsFetch: number = 0
+  private readonly CACHE_DURATION = 30000 // 30 seconds
+
   private normalizeDocument(data: any): Document {
     const uploadedAt = data.uploaded_at ?? data.uploadedAt ?? new Date().toISOString()
     const status = (data.status ?? 'ready') as DocumentStatus
@@ -154,6 +167,30 @@ class RAGService {
   }
 
   async fetchDocuments(): Promise<Document[]> {
+    const now = Date.now()
+
+    // Return cached data if fresh (< 30s old)
+    if (this.documents.length > 0 && now - this.lastDocumentsFetch < this.CACHE_DURATION) {
+      return this.documents
+    }
+
+    // Deduplicate concurrent requests
+    if (this.documentsFetchPromise) {
+      return this.documentsFetchPromise
+    }
+
+    this.documentsFetchPromise = this._fetchDocumentsInternal()
+
+    try {
+      const result = await this.documentsFetchPromise
+      this.lastDocumentsFetch = now
+      return result
+    } finally {
+      this.documentsFetchPromise = null
+    }
+  }
+
+  private async _fetchDocumentsInternal(): Promise<Document[]> {
     try {
       const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/documents`, {
         method: 'GET',
@@ -396,6 +433,35 @@ class RAGService {
    * Lista todas las conversaciones recientes
    */
   async listConversations(limit: number = 10): Promise<any[]> {
+    const now = Date.now()
+
+    // Return cached data if fresh and same limit
+    if (
+      this.conversationsCache.length > 0 &&
+      now - this.lastConversationsList < this.CACHE_DURATION &&
+      this.lastConversationsLimit === limit
+    ) {
+      return this.conversationsCache
+    }
+
+    // Deduplicate concurrent requests
+    if (this.conversationsListPromise) {
+      return this.conversationsListPromise
+    }
+
+    this.conversationsListPromise = this._listConversationsInternal(limit)
+
+    try {
+      const result = await this.conversationsListPromise
+      this.lastConversationsList = now
+      this.lastConversationsLimit = limit
+      return result
+    } finally {
+      this.conversationsListPromise = null
+    }
+  }
+
+  private async _listConversationsInternal(limit: number): Promise<any[]> {
     try {
       const response = await fetch(`${RAG_BACKEND_URL}/conversations?limit=${limit}`, {
         method: 'GET',
@@ -413,7 +479,8 @@ class RAGService {
       }
 
       const result = await response.json()
-      return result.conversations || []
+      this.conversationsCache = result.conversations || []
+      return this.conversationsCache
 
     } catch (error) {
       console.error('Error listing conversations:', error)
@@ -422,6 +489,30 @@ class RAGService {
   }
 
   async getKnowledgeBaseAnalytics(options: { days?: number; documentLimit?: number } = {}): Promise<KnowledgeBaseAnalytics> {
+    const now = Date.now()
+
+    // Return cached data if fresh (< 30s old)
+    if (this.analyticsCache && now - this.lastAnalyticsFetch < this.CACHE_DURATION) {
+      return this.analyticsCache
+    }
+
+    // Deduplicate concurrent requests
+    if (this.analyticsPromise) {
+      return this.analyticsPromise
+    }
+
+    this.analyticsPromise = this._getKnowledgeBaseAnalyticsInternal(options)
+
+    try {
+      const result = await this.analyticsPromise
+      this.lastAnalyticsFetch = now
+      return result
+    } finally {
+      this.analyticsPromise = null
+    }
+  }
+
+  private async _getKnowledgeBaseAnalyticsInternal(options: { days?: number; documentLimit?: number } = {}): Promise<KnowledgeBaseAnalytics> {
     const defaultAnalytics: KnowledgeBaseAnalytics = {
       summary: {
         totalQueries: 0,
@@ -435,6 +526,7 @@ class RAGService {
     }
 
     if (!RAG_BACKEND_URL) {
+      this.analyticsCache = defaultAnalytics
       return defaultAnalytics
     }
 
@@ -470,7 +562,7 @@ class RAGService {
           const summary = result.summary ?? {}
           const documents = Array.isArray(result.documents) ? result.documents : []
 
-          return {
+          const analytics: KnowledgeBaseAnalytics = {
             summary: {
               totalQueries: Number(summary.total_queries ?? summary.totalQueries ?? 0),
               avgLatencyMs: Number(summary.avg_latency_ms ?? summary.avgLatencyMs ?? 0),
@@ -484,6 +576,9 @@ class RAGService {
               queryCount: Number(item.query_count ?? item.queryCount ?? 0)
             })).filter((doc: { documentId: string; queryCount: number }) => doc.documentId)
           }
+
+          this.analyticsCache = analytics
+          return analytics
         }
 
         if (response.status === 404) {
@@ -503,10 +598,12 @@ class RAGService {
 
     } catch (error) {
       console.error('Error fetching knowledge base analytics:', error)
+      this.analyticsCache = defaultAnalytics
       return defaultAnalytics
     }
 
     console.warn('Knowledge base analytics unavailable, returning defaults')
+    this.analyticsCache = defaultAnalytics
     return defaultAnalytics
   }
 

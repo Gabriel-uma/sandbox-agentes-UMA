@@ -36,6 +36,7 @@ interface KnowledgeBaseContextValue {
   hasLoaded: boolean
   error: Error | null
   refresh: () => Promise<void>
+  load: () => Promise<void>
   updateDocument: (docId: string, updater: (doc: IndexedDocument) => IndexedDocument) => void
   formatFileSize: (bytes: number) => string
 }
@@ -178,8 +179,11 @@ export function KnowledgeBaseProvider({ children }: { children: React.ReactNode 
     }
   }, [formatFileSize])
 
-  useEffect(() => {
-    loadKnowledgeBase()
+  // REMOVED: Auto-load on mount for performance optimization
+  // Knowledge base now loads lazily when documents section is accessed
+
+  const load = useCallback(async () => {
+    await loadKnowledgeBase({ force: false })
   }, [loadKnowledgeBase])
 
   const refresh = useCallback(async () => {
@@ -194,9 +198,10 @@ export function KnowledgeBaseProvider({ children }: { children: React.ReactNode 
     hasLoaded,
     error,
     refresh,
+    load,
     updateDocument,
     formatFileSize
-  }), [documents, stats, isLoading, hasLoaded, error, refresh, updateDocument, formatFileSize])
+  }), [documents, stats, isLoading, hasLoaded, error, refresh, load, updateDocument, formatFileSize])
 
   return (
     <KnowledgeBaseContext.Provider value={value}>

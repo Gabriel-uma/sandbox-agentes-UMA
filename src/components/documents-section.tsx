@@ -1,6 +1,7 @@
 
 import { useState, useCallback, useEffect } from "react"
 import { ragService, Document, DocumentStatus } from "@/lib/rag-service"
+import { useKnowledgeBase } from "@/context/knowledge-base-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -41,6 +42,7 @@ interface UploadedDocument extends Document {
 const ICON_CLASS = "w-6 h-6 text-muted-foreground"
 
 export function DocumentsSection() {
+  const knowledgeBase = useKnowledgeBase()
   const [dragActive, setDragActive] = useState(false)
   const [documents, setDocuments] = useState<UploadedDocument[]>([])
   const [hasLoaded, setHasLoaded] = useState(false)
@@ -92,20 +94,58 @@ export function DocumentsSection() {
     }
   }, [toUploadedDocument])
 
+  // Lazy load knowledge base data when this section mounts
   useEffect(() => {
+    // Load knowledge base if not already loaded
+    if (!knowledgeBase.hasLoaded && !knowledgeBase.isLoading) {
+      void knowledgeBase.load()
+    }
+    // Then load documents
     void loadDocuments()
-  }, [loadDocuments])
+  }, [loadDocuments, knowledgeBase])
 
   // Polling effect for documents that are still indexing
+  // Optimized: polls every 10s and stops after 2 minutes
   useEffect(() => {
-    const indexingDocs = documents.filter(doc => doc.status === 'indexing')
+    const now = Date.now()
+    const TWO_MINUTES = 120000 // 2 minutes in ms
+    const POLL_INTERVAL = 10000 // 10 seconds
+
+    // Filter documents that are indexing and haven't timed out yet
+    const indexingDocs = documents.filter(doc => {
+      if (doc.status !== 'indexing') return false
+
+      // Stop polling documents that have been indexing for more than 2 minutes
+      const timeSinceUpload = now - doc.uploadedAt.getTime()
+      return timeSinceUpload < TWO_MINUTES
+    })
 
     if (indexingDocs.length === 0) {
       return
     }
 
     const pollInterval = setInterval(async () => {
+      const currentTime = Date.now()
+
       for (const doc of indexingDocs) {
+        // Double-check timeout before polling
+        const timeSinceUpload = currentTime - doc.uploadedAt.getTime()
+        if (timeSinceUpload >= TWO_MINUTES) {
+          // Mark as failed if still indexing after 2 minutes
+          setDocuments(prev =>
+            prev.map(d =>
+              d.id === doc.id
+                ? {
+                    ...d,
+                    status: 'index_failed' as DocumentStatus,
+                    indexed: false,
+                  }
+                : d
+            )
+          )
+          continue
+        }
+
         try {
           const statusResult = await ragService.checkDocumentStatus(doc.id)
 
@@ -128,7 +168,7 @@ export function DocumentsSection() {
           console.error(`Error polling status for document ${doc.id}:`, error)
         }
       }
-    }, 3000) // Poll every 3 seconds
+    }, POLL_INTERVAL)
 
     return () => clearInterval(pollInterval)
   }, [documents])
