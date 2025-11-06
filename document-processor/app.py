@@ -401,7 +401,7 @@ def reindex_document(document_id):
 
         # Intentar indexar
         try:
-            index_manager.import_embeddings(embeddings_uri)
+            index_manager.import_embeddings(embeddings_uri, async_mode=False)
             logger.info(f"Document {document_id} reindexed successfully")
 
             # Actualizar metadata
@@ -428,6 +428,156 @@ def reindex_document(document_id):
     except Exception as e:
         logger.error(f"Error reindexing document: {str(e)}", exc_info=True)
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
+
+
+@app.route('/documents/sync', methods=['POST'])
+def sync_documents():
+    """
+    Sincroniza el estado de documentos estancados en 'indexing' o con problemas.
+    Este endpoint detecta y repara documentos que:
+    - Están en estado 'indexing' por más de 5 minutos
+    - Tienen chunks faltantes en GCS
+    - Necesitan reintento de indexación
+    """
+    if not services_ready():
+        return jsonify({'error': 'Service unavailable'}), 503
+
+    try:
+        from datetime import datetime, timedelta
+
+        logger.info("Starting document synchronization")
+
+        # Obtener todos los documentos
+        documents = storage_manager.list_documents()
+
+        # Tiempo límite: documentos en 'indexing' por más de 5 minutos
+        STALE_THRESHOLD_MINUTES = 5
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+
+        sync_results = {
+            'total_documents': len(documents),
+            'stale_detected': 0,
+            'chunks_missing': 0,
+            'reindex_attempted': 0,
+            'reindex_succeeded': 0,
+            'reindex_failed': 0,
+            'marked_as_failed': 0,
+            'details': []
+        }
+
+        for doc in documents:
+            document_id = doc.get('document_id')
+            status = doc.get('status')
+            uploaded_at_str = doc.get('uploaded_at')
+
+            if not document_id or not status:
+                continue
+
+            # Detectar documentos estancados en 'indexing'
+            if status == 'indexing':
+                try:
+                    uploaded_at = datetime.fromisoformat(uploaded_at_str.replace('Z', '+00:00'))
+                    time_since_upload = datetime.now(timezone.utc) - uploaded_at
+
+                    if time_since_upload > timedelta(minutes=STALE_THRESHOLD_MINUTES):
+                        sync_results['stale_detected'] += 1
+                        logger.warning(f"Document {document_id} stale in 'indexing' state for {time_since_upload}")
+
+                        # Verificar si los chunks existen en GCS
+                        chunks = storage_manager.get_document_chunks(document_id)
+
+                        if not chunks:
+                            sync_results['chunks_missing'] += 1
+                            logger.error(f"Document {document_id} has no chunks in GCS, marking as failed")
+
+                            # Marcar como fallido si no hay chunks
+                            doc['status'] = 'index_failed'
+                            doc['indexed'] = False
+                            doc['index_error'] = 'Chunks not found in storage after indexing timeout'
+                            storage_manager.save_document_metadata(document_id, doc)
+                            sync_results['marked_as_failed'] += 1
+
+                            sync_results['details'].append({
+                                'document_id': document_id,
+                                'filename': doc.get('filename', 'unknown'),
+                                'action': 'marked_as_failed',
+                                'reason': 'chunks_missing'
+                            })
+                        else:
+                            # Chunks existen, intentar reindexar
+                            embeddings_uri = doc.get('uris', {}).get('embeddings')
+
+                            if embeddings_uri:
+                                sync_results['reindex_attempted'] += 1
+                                logger.info(f"Attempting to reindex document {document_id}")
+
+                                try:
+                                    index_manager.import_embeddings(embeddings_uri, async_mode=False)
+
+                                    # Actualizar metadata como exitoso
+                                    doc['status'] = 'ready'
+                                    doc['indexed'] = True
+                                    if 'index_error' in doc:
+                                        del doc['index_error']
+                                    storage_manager.save_document_metadata(document_id, doc)
+
+                                    sync_results['reindex_succeeded'] += 1
+                                    logger.info(f"Document {document_id} successfully reindexed")
+
+                                    sync_results['details'].append({
+                                        'document_id': document_id,
+                                        'filename': doc.get('filename', 'unknown'),
+                                        'action': 'reindexed',
+                                        'status': 'success'
+                                    })
+
+                                except Exception as reindex_error:
+                                    sync_results['reindex_failed'] += 1
+                                    logger.error(f"Failed to reindex document {document_id}: {str(reindex_error)}")
+
+                                    # Marcar como fallido
+                                    doc['status'] = 'index_failed'
+                                    doc['indexed'] = False
+                                    doc['index_error'] = f"Reindex attempt failed: {str(reindex_error)}"
+                                    storage_manager.save_document_metadata(document_id, doc)
+                                    sync_results['marked_as_failed'] += 1
+
+                                    sync_results['details'].append({
+                                        'document_id': document_id,
+                                        'filename': doc.get('filename', 'unknown'),
+                                        'action': 'reindex_failed',
+                                        'error': str(reindex_error)
+                                    })
+                            else:
+                                # No hay embeddings URI, marcar como fallido
+                                logger.error(f"Document {document_id} has no embeddings URI")
+                                doc['status'] = 'index_failed'
+                                doc['indexed'] = False
+                                doc['index_error'] = 'Embeddings URI not found'
+                                storage_manager.save_document_metadata(document_id, doc)
+                                sync_results['marked_as_failed'] += 1
+
+                                sync_results['details'].append({
+                                    'document_id': document_id,
+                                    'filename': doc.get('filename', 'unknown'),
+                                    'action': 'marked_as_failed',
+                                    'reason': 'embeddings_uri_missing'
+                                })
+
+                except Exception as e:
+                    logger.error(f"Error processing document {document_id}: {str(e)}")
+                    continue
+
+        logger.info(f"Synchronization completed: {sync_results}")
+
+        return jsonify({
+            'status': 'completed',
+            'summary': sync_results
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error during document synchronization: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Synchronization failed', 'details': str(e)}), 500
 
 
 @app.errorhandler(413)

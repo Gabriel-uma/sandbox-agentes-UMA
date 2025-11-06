@@ -9,6 +9,7 @@ import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +32,7 @@ import {
   FileUp,
   HardDrive,
   Loader2,
+  RefreshCw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -52,6 +54,8 @@ export function DocumentsSection() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [documentToDelete, setDocumentToDelete] = useState<{ id: string; name: string } | null>(null)
   const [deleteMultipleDialogOpen, setDeleteMultipleDialogOpen] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
 
   const toUploadedDocument = useCallback(
     (document: Document, extras: Partial<UploadedDocument> = {}): UploadedDocument => {
@@ -349,6 +353,58 @@ export function DocumentsSection() {
     }
   }
 
+  const syncDocuments = async () => {
+    if (!canInteract || isSyncing) return
+
+    setIsSyncing(true)
+    setSyncMessage(null)
+    setUploadError(null)
+
+    try {
+      console.log("Starting document synchronization...")
+      const result = await ragService.syncDocuments()
+
+      console.log("Sync result:", result)
+
+      const { summary } = result
+
+      // Crear mensaje de resumen
+      let message = `Sincronización completada: `
+      const parts: string[] = []
+
+      if (summary.stale_detected > 0) {
+        parts.push(`${summary.stale_detected} documento(s) estancado(s) detectado(s)`)
+      }
+      if (summary.reindex_succeeded > 0) {
+        parts.push(`${summary.reindex_succeeded} reindexado(s) exitosamente`)
+      }
+      if (summary.reindex_failed > 0) {
+        parts.push(`${summary.reindex_failed} falló(s) al reindexar`)
+      }
+      if (summary.marked_as_failed > 0) {
+        parts.push(`${summary.marked_as_failed} marcado(s) como fallido(s)`)
+      }
+
+      if (parts.length === 0) {
+        message += "No se encontraron problemas"
+      } else {
+        message += parts.join(", ")
+      }
+
+      setSyncMessage(message)
+
+      // Recargar documentos después de sincronizar
+      await loadDocuments()
+
+    } catch (error) {
+      console.error("Error syncing documents:", error)
+      const message = error instanceof Error ? error.message : "Error al sincronizar documentos"
+      setUploadError(message)
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
   const formatFileSize = (bytes: number) => {
     if (!bytes) return "0 Bytes"
     const k = 1024
@@ -414,6 +470,28 @@ export function DocumentsSection() {
                   variant="ghost"
                   size="sm"
                   onClick={() => setUploadError(null)}
+                  className="w-8 h-8 p-0"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {syncMessage && (
+          <Card className="mb-4 border-green-200 bg-green-50">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-green-900">Sincronización exitosa</p>
+                  <p className="text-sm text-green-700">{syncMessage}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSyncMessage(null)}
                   className="w-8 h-8 p-0"
                 >
                   <X className="w-4 h-4" />
@@ -506,8 +584,26 @@ export function DocumentsSection() {
                   accept=".pdf,.txt,.docx"
                 />
               </label>
-              <Button variant="outline" size="sm" onClick={() => void loadDocuments()}>
+              <Button variant="outline" size="sm" onClick={() => void loadDocuments()} disabled={!canInteract}>
                 Refrescar lista
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void syncDocuments()}
+                disabled={!canInteract || isSyncing}
+              >
+                {isSyncing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Sincronizando...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Sincronizar
+                  </>
+                )}
               </Button>
             </div>
           </Card>
@@ -586,9 +682,16 @@ export function DocumentsSection() {
 
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-col gap-1 mb-1 sm:flex-row sm:items-center sm:gap-2 sm:justify-between">
-                          <p className="w-full text-sm font-medium text-foreground truncate sm:flex-1 sm:min-w-0">
-                            {doc.name}
-                          </p>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <p className="w-full text-sm font-medium text-foreground truncate sm:flex-1 sm:min-w-0 cursor-default">
+                                {doc.name}
+                              </p>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="max-w-xs break-words">{doc.name}</p>
+                            </TooltipContent>
+                          </Tooltip>
                           <div className="flex items-center gap-2 sm:flex-shrink-0">
                             {doc.indexed && (
                               <Badge variant="default" className="text-xs">

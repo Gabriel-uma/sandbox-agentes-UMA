@@ -265,6 +265,49 @@ class RAGService {
   }
 
   /**
+   * Sincroniza documentos estancados o con problemas
+   * Detecta documentos en estado 'indexing' por más de 5 minutos y los reindexa o marca como fallidos
+   */
+  async syncDocuments(): Promise<{
+    status: string
+    summary: {
+      total_documents: number
+      stale_detected: number
+      chunks_missing: number
+      reindex_attempted: number
+      reindex_succeeded: number
+      reindex_failed: number
+      marked_as_failed: number
+      details: Array<{
+        document_id: string
+        filename: string
+        action: string
+        status?: string
+        error?: string
+        reason?: string
+      }>
+    }
+  }> {
+    try {
+      const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/documents/sync`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || `Error ${response.status}: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      return result
+    } catch (error) {
+      console.error('Error syncing documents:', error)
+      const message = error instanceof Error ? error : new Error('Error syncing documents')
+      throw message
+    }
+  }
+
+  /**
    * Consulta el estado de indexación de un documento
    */
   async checkDocumentStatus(documentId: string): Promise<{ status: DocumentStatus; indexed: boolean; filename: string }> {
