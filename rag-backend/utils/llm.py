@@ -226,6 +226,23 @@ Respuesta:"""
 
         return max(0.1, min(1.0, base_confidence))
 
+    def _normalize_model_name(self, model_name: str) -> str:
+        """
+        Normaliza el nombre del modelo según el modo de operación.
+        - Para Vertex AI: remueve 'models/' prefix
+        - Para API pública: asegura que tenga 'models/' prefix
+        """
+        if self.use_public_api:
+            # API pública necesita el prefijo 'models/'
+            if not model_name.startswith('models/'):
+                return f'models/{model_name}'
+            return model_name
+        else:
+            # Vertex AI no usa el prefijo 'models/'
+            if model_name.startswith('models/'):
+                return model_name.replace('models/', '', 1)
+            return model_name
+
     def _generate_with_model(self, prompt: str, model_name: str) -> Tuple[str, Optional[Any]]:
         """Encapsula la llamada al modelo según el modo configurado."""
         generation_params = {
@@ -241,10 +258,13 @@ Respuesta:"""
         if is_deepseek:
             return self._generate_with_deepseek(prompt, model_name, generation_params)
 
+        # Normalizar el nombre del modelo
+        normalized_model = self._normalize_model_name(model_name)
+
         # Para modelos Gemini, usar API pública o Vertex AI
         if self.use_public_api:
             response = self.model.models.generate_content(
-                model=model_name,
+                model=normalized_model,
                 contents=prompt,
                 config=generation_params
             )
@@ -264,8 +284,9 @@ Respuesta:"""
             raise ValueError("Gemini public API response without text content")
 
         # Vertex AI path - necesitamos crear una instancia del modelo si cambió
-        if model_name != self.model_name:
-            temp_model = GenerativeModel(model_name)
+        normalized_default = self._normalize_model_name(self.model_name)
+        if normalized_model != normalized_default:
+            temp_model = GenerativeModel(normalized_model)
             response = temp_model.generate_content(
                 prompt,
                 generation_config=generation_params

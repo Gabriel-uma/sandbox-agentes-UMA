@@ -52,7 +52,7 @@ export function SettingsSection() {
 
   const defaultSettings = {
     // AI Model Settings
-    selectedModel: "gemini-pro",
+    selectedModel: "models/gemini-2.5-flash",
     temperature: [0.7],
     maxResponseLength: [2048],
     topP: [0.9],
@@ -115,44 +115,44 @@ export function SettingsSection() {
     {
       id: "models/gemini-2.0-flash-exp",
       name: "Gemini 2.0 Flash (Experimental)",
-      description: "Última generación, multimodal, GRATIS hasta 15 RPM",
+      description: "✅ Última generación, multimodal, funcionando",
       maxTokens: 8192,
       available: true
     },
     {
       id: "models/gemini-2.5-flash",
       name: "Gemini 2.5 Flash",
-      description: "Modelo actual, equilibrio perfecto velocidad/calidad (En uso)",
+      description: "✅ Modelo actual, equilibrio perfecto velocidad/calidad (recomendado)",
       maxTokens: 8192,
       available: true
     },
     {
       id: "models/gemini-1.5-flash",
       name: "Gemini 1.5 Flash",
-      description: "Muy rápido, GRATIS hasta 15 RPM, contexto 1M tokens",
+      description: "⚠️ No disponible en Vertex AI (requiere configurar GENAI_API_KEY)",
       maxTokens: 8192,
-      available: true
+      available: false
     },
     {
       id: "models/gemini-1.5-pro",
       name: "Gemini 1.5 Pro",
-      description: "Más potente, razonamiento avanzado, contexto 2M tokens",
+      description: "⚠️ No disponible en Vertex AI (requiere configurar GENAI_API_KEY)",
       maxTokens: 8192,
-      available: true
+      available: false
     },
     {
       id: "deepseek-chat",
       name: "DeepSeek V3",
-      description: "Económico ($0.27/M tokens), rendimiento GPT-4 level",
+      description: "⚠️ Requiere saldo en cuenta DeepSeek ($0.27/M tokens)",
       maxTokens: 8192,
-      available: true
+      available: false
     },
     {
       id: "deepseek-reasoner",
       name: "DeepSeek R1",
-      description: "Especializado en razonamiento complejo y matemáticas",
+      description: "⚠️ Requiere saldo en cuenta DeepSeek (razonamiento complejo)",
       maxTokens: 8192,
-      available: true
+      available: false
     }
   ]
 
