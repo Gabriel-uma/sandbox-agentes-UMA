@@ -440,8 +440,8 @@ export function DocumentsSection() {
   const processingDocuments = documents.filter((doc) => doc.status === "processing" || doc.status === "uploading" || doc.status === "indexing").length
 
   return (
-    <div className="h-full flex flex-col p-4 md:p-6 overflow-hidden max-w-full">
-      <div className="mb-6 flex-shrink-0">
+    <div className="h-full flex flex-col overflow-hidden max-w-full">
+      <div className="px-4 md:px-8 lg:px-12 py-6 mb-6 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-2xl font-semibold text-foreground">Documentos</h2>
@@ -555,11 +555,12 @@ export function DocumentsSection() {
 
       <Separator className="my-4" />
 
-      <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-4 lg:gap-6">
-        <div className="space-y-4 lg:space-y-6 overflow-y-auto pr-2">
+      <div className="flex-1 overflow-hidden px-4 md:px-8 lg:px-12">
+        <div className="h-full grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-4 lg:gap-6 max-w-full overflow-hidden">
+        <div className="space-y-4 overflow-y-auto pr-2 max-w-full">
           <Card
             className={cn(
-              "border-dashed border-2 flex flex-col items-center justify-center min-h-[260px] p-6 text-center max-w-full",
+              "border-dashed border-2 flex flex-col items-center justify-center min-h-[220px] p-4 text-center w-full",
               dragActive ? "border-primary bg-primary/5" : "border-border"
             )}
             onDragEnter={handleDrag}
@@ -567,14 +568,14 @@ export function DocumentsSection() {
             onDragLeave={handleDrag}
             onDrop={handleDrop}
           >
-            <Upload className="w-12 h-12 text-primary mb-4" />
-            <h3 className="text-lg font-semibold text-foreground">Sube tus documentos</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Arrastra y suelta archivos o selecciona desde tu computadora. Se procesarán automáticamente.
+            <Upload className="w-10 h-10 text-primary mb-3" />
+            <h3 className="text-base font-semibold text-foreground">Sube tus documentos</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              Arrastra archivos o selecciona desde tu PC
             </p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <label className="relative inline-flex items-center justify-center px-6 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md cursor-pointer hover:bg-primary/90">
-                <FileUp className="w-4 h-4 mr-2" />
+            <div className="flex flex-col gap-2 w-full">
+              <label className="relative inline-flex items-center justify-center px-4 py-2 text-xs font-medium bg-primary text-primary-foreground rounded-md cursor-pointer hover:bg-primary/90 w-full">
+                <FileUp className="w-3 h-3 mr-2" />
                 Seleccionar archivos
                 <input
                   type="file"
@@ -584,7 +585,7 @@ export function DocumentsSection() {
                   accept=".pdf,.txt,.docx"
                 />
               </label>
-              <Button variant="outline" size="sm" onClick={() => void loadDocuments()} disabled={!canInteract}>
+              <Button variant="outline" size="sm" onClick={() => void loadDocuments()} disabled={!canInteract} className="w-full text-xs">
                 Refrescar lista
               </Button>
               <Button
@@ -592,15 +593,16 @@ export function DocumentsSection() {
                 size="sm"
                 onClick={() => void syncDocuments()}
                 disabled={!canInteract || isSyncing}
+                className="w-full text-xs"
               >
                 {isSyncing ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-3 h-3 mr-2 animate-spin" />
                     Sincronizando...
                   </>
                 ) : (
                   <>
-                    <RefreshCw className="w-4 h-4 mr-2" />
+                    <RefreshCw className="w-3 h-3 mr-2" />
                     Sincronizar
                   </>
                 )}
@@ -608,22 +610,21 @@ export function DocumentsSection() {
             </div>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">Instrucciones de Carga</CardTitle>
+          <Card className="w-full">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-xs">Instrucciones</CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
-              <ul className="text-xs text-muted-foreground space-y-2">
-                <li>• Máximo 50MB por archivo</li>
-                <li>• Hasta 100 archivos simultáneos</li>
-                <li>• Indexación automática tras procesamiento</li>
-                <li>• Los documentos procesados estarán disponibles para consulta</li>
+              <ul className="text-xs text-muted-foreground space-y-1.5">
+                <li>• Máximo 50MB</li>
+                <li>• Hasta 100 archivos</li>
+                <li>• Indexación automática</li>
               </ul>
             </CardContent>
           </Card>
         </div>
 
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden max-w-full">
           <div className="mb-4 flex-shrink-0">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -636,11 +637,11 @@ export function DocumentsSection() {
             </div>
           </div>
 
-          <Card className="flex-1 flex flex-col overflow-hidden max-w-full">
+          <Card className="flex-1 flex flex-col overflow-hidden w-full">
             <CardHeader>
               <CardTitle className="text-lg">Lista de Documentos</CardTitle>
             </CardHeader>
-            <CardContent className="p-0 flex-1 overflow-hidden max-w-full">
+            <CardContent className="p-0 flex-1 overflow-hidden w-full">
               {!hasLoaded ? (
                 <div className="h-full flex items-center justify-center">
                   <div className="flex flex-col items-center gap-3">
@@ -761,6 +762,7 @@ export function DocumentsSection() {
               )}
             </CardContent>
           </Card>
+        </div>
         </div>
       </div>
 
