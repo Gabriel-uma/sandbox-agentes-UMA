@@ -1,9 +1,10 @@
 """
-Generación de respuestas usando Gemini.
+Generación de respuestas usando Gemini y DeepSeek.
 
-Se soportan dos modos:
+Se soportan tres modos:
 1. Vertex AI (por defecto) mediante service account.
 2. API pública de Gemini cuando se define GENAI_API_KEY.
+3. DeepSeek mediante API compatible con OpenAI (requiere DEEPSEEK_API_KEY).
 """
 import os
 import time
@@ -15,6 +16,12 @@ from vertexai.generative_models import GenerativeModel
 
 import google.genai as genai
 from google.genai import types as genai_types
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +46,7 @@ class LLMGenerator:
             'models/gemini-2.5-flash'
         )
         self.genai_api_key = os.environ.get('GENAI_API_KEY')
+        self.deepseek_api_key = os.environ.get('DEEPSEEK_API_KEY')
 
         if not self.project_id:
             raise ValueError("PROJECT_ID environment variable is required")
@@ -48,6 +56,18 @@ class LLMGenerator:
 
         if self.use_public_api and not self.model_name.startswith("models/"):
             self.model_name = f"models/{self.model_name}"
+
+        # Inicializar cliente DeepSeek si está disponible
+        self.deepseek_client = None
+        if self.deepseek_api_key and OPENAI_AVAILABLE:
+            try:
+                self.deepseek_client = OpenAI(
+                    api_key=self.deepseek_api_key,
+                    base_url="https://api.deepseek.com"
+                )
+                logger.info("DeepSeek API client initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize DeepSeek client: {e}")
 
         if self.use_public_api:
             # API pública de Gemini (solo API key, sin project/location)
@@ -86,6 +106,7 @@ class LLMGenerator:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         response_language: Optional[str] = None,
+        model_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Genera una respuesta basada en la pregunta y contexto
@@ -96,6 +117,7 @@ class LLMGenerator:
             conversation_history: Historial de conversación (opcional)
             system_prompt: Instrucciones personalizadas para el asistente
             response_language: Código de idioma preferido para la respuesta
+            model_name: Nombre del modelo a usar (opcional, usa el default si no se especifica)
 
         Returns:
             Dict con answer, confidence, y metadata
@@ -135,11 +157,14 @@ Instrucciones:
 
 Respuesta:"""
 
+            # Usar modelo especificado o el default
+            active_model = model_name if model_name else self.model_name
+
             # Generar respuesta
-            logger.info("Generating response with Gemini")
+            logger.info(f"Generating response with model: {active_model}")
 
             start_time = time.perf_counter()
-            answer, usage_metadata = self._generate_with_model(prompt)
+            answer, usage_metadata = self._generate_with_model(prompt, active_model)
             latency_ms = (time.perf_counter() - start_time) * 1000
 
             usage = self._normalize_usage(usage_metadata)
@@ -152,7 +177,7 @@ Respuesta:"""
             return {
                 'answer': answer,
                 'confidence': confidence,
-                'model': self.model_name,
+                'model': active_model,
                 'context_chunks_used': len(context_chunks),
                 'latency_ms': latency_ms,
                 'token_usage': usage
@@ -201,7 +226,7 @@ Respuesta:"""
 
         return max(0.1, min(1.0, base_confidence))
 
-    def _generate_with_model(self, prompt: str) -> Tuple[str, Optional[Any]]:
+    def _generate_with_model(self, prompt: str, model_name: str) -> Tuple[str, Optional[Any]]:
         """Encapsula la llamada al modelo según el modo configurado."""
         generation_params = {
             "temperature": 0.3,
@@ -210,9 +235,16 @@ Respuesta:"""
             "max_output_tokens": 1024,
         }
 
+        # Detectar si es un modelo DeepSeek
+        is_deepseek = model_name in ['deepseek-chat', 'deepseek-reasoner']
+
+        if is_deepseek:
+            return self._generate_with_deepseek(prompt, model_name, generation_params)
+
+        # Para modelos Gemini, usar API pública o Vertex AI
         if self.use_public_api:
             response = self.model.models.generate_content(
-                model=self.model_name,
+                model=model_name,
                 contents=prompt,
                 config=generation_params
             )
@@ -231,13 +263,71 @@ Respuesta:"""
 
             raise ValueError("Gemini public API response without text content")
 
-        # Vertex AI path
-        response = self.model.generate_content(
-            prompt,
-            generation_config=generation_params
-        )
+        # Vertex AI path - necesitamos crear una instancia del modelo si cambió
+        if model_name != self.model_name:
+            temp_model = GenerativeModel(model_name)
+            response = temp_model.generate_content(
+                prompt,
+                generation_config=generation_params
+            )
+        else:
+            response = self.model.generate_content(
+                prompt,
+                generation_config=generation_params
+            )
 
         return response.text, getattr(response, "usage_metadata", None)
+
+    def _generate_with_deepseek(
+        self,
+        prompt: str,
+        model_name: str,
+        generation_params: Dict[str, Any]
+    ) -> Tuple[str, Optional[Any]]:
+        """Genera respuesta usando DeepSeek API (compatible con OpenAI)."""
+        if not self.deepseek_client:
+            raise ValueError(
+                "DeepSeek API not available. Please set DEEPSEEK_API_KEY environment variable "
+                "and ensure openai package is installed."
+            )
+
+        try:
+            # Mapear modelo name a DeepSeek API
+            deepseek_model_map = {
+                'deepseek-chat': 'deepseek-chat',
+                'deepseek-reasoner': 'deepseek-reasoner'
+            }
+
+            api_model = deepseek_model_map.get(model_name, 'deepseek-chat')
+
+            response = self.deepseek_client.chat.completions.create(
+                model=api_model,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=generation_params.get("temperature", 0.3),
+                top_p=generation_params.get("top_p", 0.8),
+                max_tokens=generation_params.get("max_output_tokens", 1024),
+                stream=False
+            )
+
+            if not response.choices:
+                raise ValueError("DeepSeek API returned no choices")
+
+            answer = response.choices[0].message.content
+
+            # Construir usage metadata compatible
+            usage_metadata = {
+                'prompt_tokens': response.usage.prompt_tokens if response.usage else None,
+                'completion_token_count': response.usage.completion_tokens if response.usage else None,
+                'total_tokens': response.usage.total_tokens if response.usage else None
+            }
+
+            return answer, usage_metadata
+
+        except Exception as e:
+            logger.error(f"Error calling DeepSeek API: {str(e)}")
+            raise
 
     def _normalize_usage(self, usage: Optional[Any]) -> Dict[str, int]:
         """Convierte metadatos de uso en un diccionario simple."""

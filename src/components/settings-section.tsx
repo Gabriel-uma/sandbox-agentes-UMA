@@ -113,25 +113,46 @@ export function SettingsSection() {
 
   const aiModels: AIModelConfig[] = [
     {
-      id: "gemini-pro",
-      name: "Gemini Pro",
-      description: "Modelo de Google, integración con GCP (Actualmente en uso)",
-      maxTokens: 2048,
+      id: "models/gemini-2.0-flash-exp",
+      name: "Gemini 2.0 Flash (Experimental)",
+      description: "Última generación, multimodal, GRATIS hasta 15 RPM",
+      maxTokens: 8192,
       available: true
     },
     {
-      id: "gemini-1.5-flash",
-      name: "Gemini 1.5 Flash",
-      description: "Más rápido, ideal para respuestas rápidas",
-      maxTokens: 4096,
-      available: false
+      id: "models/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      description: "Modelo actual, equilibrio perfecto velocidad/calidad (En uso)",
+      maxTokens: 8192,
+      available: true
     },
     {
-      id: "gemini-1.5-pro",
-      name: "Gemini 1.5 Pro",
-      description: "Modelo más avanzado con contexto ampliado",
+      id: "models/gemini-1.5-flash",
+      name: "Gemini 1.5 Flash",
+      description: "Muy rápido, GRATIS hasta 15 RPM, contexto 1M tokens",
       maxTokens: 8192,
-      available: false
+      available: true
+    },
+    {
+      id: "models/gemini-1.5-pro",
+      name: "Gemini 1.5 Pro",
+      description: "Más potente, razonamiento avanzado, contexto 2M tokens",
+      maxTokens: 8192,
+      available: true
+    },
+    {
+      id: "deepseek-chat",
+      name: "DeepSeek V3",
+      description: "Económico ($0.27/M tokens), rendimiento GPT-4 level",
+      maxTokens: 8192,
+      available: true
+    },
+    {
+      id: "deepseek-reasoner",
+      name: "DeepSeek R1",
+      description: "Especializado en razonamiento complejo y matemáticas",
+      maxTokens: 8192,
+      available: true
     }
   ]
 

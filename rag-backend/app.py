@@ -103,6 +103,7 @@ def query_rag():
 
         response_language = data.get('response_language')
         system_prompt = data.get('system_prompt')
+        model_name = data.get('model')
 
         logger.info(f"Processing query: {question[:50]}...")
 
@@ -151,7 +152,8 @@ def query_rag():
             context_chunks=chunks,
             conversation_history=conversation_history,
             system_prompt=system_prompt,
-            response_language=response_language
+            response_language=response_language,
+            model_name=model_name
         )
 
         answer = llm_response['answer']

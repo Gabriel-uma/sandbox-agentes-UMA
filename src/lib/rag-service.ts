@@ -69,6 +69,7 @@ export interface KnowledgeBaseAnalytics {
 interface SavedSettings {
   systemPrompt?: string
   responseLanguage?: string
+  selectedModel?: string
 }
 
 // Configuración de URLs desde variables de entorno
@@ -371,7 +372,8 @@ class RAGService {
           top_k: 5,
           include_history: true,
           system_prompt: savedSettings?.systemPrompt,
-          response_language: savedSettings?.responseLanguage
+          response_language: savedSettings?.responseLanguage,
+          model: savedSettings?.selectedModel
         }),
       })
 
