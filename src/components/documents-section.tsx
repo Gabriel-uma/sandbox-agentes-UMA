@@ -440,7 +440,7 @@ export function DocumentsSection() {
   const processingDocuments = documents.filter((doc) => doc.status === "processing" || doc.status === "uploading" || doc.status === "indexing").length
 
   return (
-    <div className="h-full flex flex-col p-6 overflow-hidden">
+    <div className="h-full flex flex-col p-4 md:p-6 overflow-hidden max-w-full">
       <div className="mb-6 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -501,7 +501,7 @@ export function DocumentsSection() {
           </Card>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Total Documentos</CardTitle>
@@ -555,11 +555,11 @@ export function DocumentsSection() {
 
       <Separator className="my-4" />
 
-      <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6">
-        <div className="space-y-6 overflow-y-auto pr-2">
+      <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-4 lg:gap-6">
+        <div className="space-y-4 lg:space-y-6 overflow-y-auto pr-2">
           <Card
             className={cn(
-              "border-dashed border-2 flex flex-col items-center justify-center min-h-[260px] p-6 text-center",
+              "border-dashed border-2 flex flex-col items-center justify-center min-h-[260px] p-6 text-center max-w-full",
               dragActive ? "border-primary bg-primary/5" : "border-border"
             )}
             onDragEnter={handleDrag}
@@ -636,11 +636,11 @@ export function DocumentsSection() {
             </div>
           </div>
 
-          <Card className="flex-1 flex flex-col overflow-hidden">
+          <Card className="flex-1 flex flex-col overflow-hidden max-w-full">
             <CardHeader>
               <CardTitle className="text-lg">Lista de Documentos</CardTitle>
             </CardHeader>
-            <CardContent className="p-0 flex-1 overflow-hidden">
+            <CardContent className="p-0 flex-1 overflow-hidden max-w-full">
               {!hasLoaded ? (
                 <div className="h-full flex items-center justify-center">
                   <div className="flex flex-col items-center gap-3">
