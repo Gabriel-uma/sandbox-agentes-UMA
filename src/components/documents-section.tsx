@@ -109,19 +109,19 @@ export function DocumentsSection() {
   }, [loadDocuments, knowledgeBase])
 
   // Polling effect for documents that are still indexing
-  // Optimized: polls every 10s and stops after 2 minutes
+  // Optimized: polls every 3s and stops after 5 minutes
   useEffect(() => {
     const now = Date.now()
-    const TWO_MINUTES = 120000 // 2 minutes in ms
-    const POLL_INTERVAL = 10000 // 10 seconds
+    const FIVE_MINUTES = 300000 // 5 minutes in ms
+    const POLL_INTERVAL = 3000 // 3 seconds - más frecuente para mejor UX
 
     // Filter documents that are indexing and haven't timed out yet
     const indexingDocs = documents.filter(doc => {
       if (doc.status !== 'indexing') return false
 
-      // Stop polling documents that have been indexing for more than 2 minutes
+      // Stop polling documents that have been indexing for more than 5 minutes
       const timeSinceUpload = now - doc.uploadedAt.getTime()
-      return timeSinceUpload < TWO_MINUTES
+      return timeSinceUpload < FIVE_MINUTES
     })
 
     if (indexingDocs.length === 0) {
@@ -134,8 +134,8 @@ export function DocumentsSection() {
       for (const doc of indexingDocs) {
         // Double-check timeout before polling
         const timeSinceUpload = currentTime - doc.uploadedAt.getTime()
-        if (timeSinceUpload >= TWO_MINUTES) {
-          // Mark as failed if still indexing after 2 minutes
+        if (timeSinceUpload >= FIVE_MINUTES) {
+          // Mark as failed if still indexing after 5 minutes
           setDocuments(prev =>
             prev.map(d =>
               d.id === doc.id
@@ -251,20 +251,28 @@ export function DocumentsSection() {
 
       const backendDocument = await ragService.uploadDocument(file)
 
-      // Don't mark as indexed if still indexing
+      // Determinar estado basado en la respuesta del backend
       const isIndexed = backendDocument.status === 'ready'
+      const progress = backendDocument.status === 'ready' ? 100 :
+                       backendDocument.status === 'indexing' ? 85 :
+                       backendDocument.status === 'processing' ? 60 : 50
 
       setDocuments((prev) =>
         prev.map((doc) =>
           doc.id === provisionalId
             ? toUploadedDocument(backendDocument, {
                 status: backendDocument.status,
-                progress: backendDocument.status === 'ready' ? 100 : 85,
+                progress: progress,
                 indexed: isIndexed,
               })
             : doc
         )
       )
+
+      // Si está indexing, el polling se encargará de actualizarlo
+      if (backendDocument.status === 'indexing') {
+        console.log(`Document ${backendDocument.id} is indexing. Polling will update status.`)
+      }
 
       setSelectedDocuments((prev) =>
         prev.map((id) => (id === provisionalId ? backendDocument.id : id))
@@ -275,9 +283,22 @@ export function DocumentsSection() {
     } catch (error) {
       console.error("Error uploading document:", error)
       const message = error instanceof Error ? error.message : "Error desconocido al subir el archivo"
-      setUploadError(message)
 
-      setDocuments((prev) => prev.filter((doc) => doc.id !== provisionalId))
+      // Si es un timeout, no eliminar el documento sino marcarlo como indexing
+      // para que el polling lo maneje
+      if (message.includes('tardando más de lo esperado')) {
+        setUploadError(`${file.name}: ${message} Usa el botón "Refrescar lista" en unos segundos para ver el estado actualizado.`)
+        setDocuments((prev) =>
+          prev.map((doc) =>
+            doc.id === provisionalId
+              ? { ...doc, status: "indexing" as DocumentStatus, progress: 85 }
+              : doc
+          )
+        )
+      } else {
+        setUploadError(message)
+        setDocuments((prev) => prev.filter((doc) => doc.id !== provisionalId))
+      }
     }
   }
 

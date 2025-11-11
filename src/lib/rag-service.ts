@@ -132,10 +132,18 @@ class RAGService {
       const formData = new FormData()
       formData.append('file', file)
 
+      console.log('Uploading document to:', `${DOCUMENT_PROCESSOR_URL}/upload`)
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 120000) // 2 minutos timeout
+
       const response = await fetch(`${DOCUMENT_PROCESSOR_URL}/upload`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       })
+
+      clearTimeout(timeoutId)
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type')
@@ -159,9 +167,16 @@ class RAGService {
       })
 
       this.upsertDocument(document)
+      console.log('Document uploaded successfully:', document)
       return document
     } catch (error) {
       console.error('Error uploading document:', error)
+
+      // Manejar errores de timeout específicamente
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('El procesamiento del documento está tardando más de lo esperado. El documento se está procesando en segundo plano.')
+      }
+
       const message = error instanceof Error ? error : new Error('Error uploading document')
       throw message
     }

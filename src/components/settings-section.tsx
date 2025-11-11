@@ -52,7 +52,7 @@ export function SettingsSection() {
 
   const defaultSettings = {
     // AI Model Settings
-    selectedModel: "models/gemini-2.5-flash",
+    selectedModel: "deepseek-chat", // Cambiado a DeepSeek que funciona
     temperature: [0.7],
     maxResponseLength: [2048],
     topP: [0.9],
@@ -94,7 +94,42 @@ export function SettingsSection() {
     try {
       const savedSettings = localStorage.getItem('rag-settings')
       if (savedSettings) {
-        setSettings(JSON.parse(savedSettings))
+        const parsed = JSON.parse(savedSettings)
+
+        // Migrar CUALQUIER modelo de Gemini a DeepSeek (que funciona)
+        const geminiModels = [
+          'gemini-pro',
+          'gemini-pro-vision',
+          'models/gemini-pro',
+          'models/gemini-pro-vision',
+          'models/gemini-1.5-flash',
+          'models/gemini-1.5-pro',
+          'models/gemini-2.0-flash-exp',
+          'models/gemini-2.5-flash',
+          'gemini-1.5-flash',
+          'gemini-1.5-pro',
+          'gemini-2.0-flash-exp',
+          'gemini-2.5-flash'
+        ]
+
+        const isGemini = geminiModels.includes(parsed.selectedModel) ||
+                        (parsed.selectedModel && parsed.selectedModel.includes('gemini'))
+
+        const needsMigration = isGemini || !parsed.selectedModel
+
+        if (needsMigration) {
+          console.warn(`⚠️ Migrating Gemini model "${parsed.selectedModel}" to DeepSeek Chat (funcionando)`)
+          parsed.selectedModel = 'deepseek-chat'
+          // Guardar la configuración migrada inmediatamente
+          localStorage.setItem('rag-settings', JSON.stringify(parsed))
+          toast({
+            title: "⚠️ Modelo actualizado",
+            description: `Los modelos de Gemini no están disponibles. Cambiado a DeepSeek Chat.`,
+            duration: 5000,
+          })
+        }
+
+        setSettings(parsed)
       }
     } catch (error) {
       console.error('Error loading settings:', error)
