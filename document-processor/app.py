@@ -183,7 +183,6 @@ def upload_document():
                 )
                 use_async = True
 
-                if True:  # Siempre asíncrono para Matching Engine
                 # Para archivos grandes: usar modo asíncrono con callback
                 def on_indexing_complete(success: bool, error_msg: str = None):
                     """Callback que se ejecuta cuando termina la indexación asíncrona"""
