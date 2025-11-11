@@ -55,23 +55,33 @@ class IndexManager:
             on_complete: Optional callback function called when indexing completes.
                         Receives (success: bool, error_message: Optional[str])
         """
+        import threading
+        thread_name = threading.current_thread().name
+        logger.info("🔄 [%s] Starting index update for %s from %s", thread_name, self.index_resource, directory)
+
         last_error: Optional[Exception] = None
         delay = initial_delay
 
         for attempt in range(max_retries + 1):
             try:
+                logger.info("🔄 [%s] Attempt %d/%d: Calling index.update_embeddings...",
+                           thread_name, attempt + 1, max_retries + 1)
                 self.index.update_embeddings(
                     contents_delta_uri=directory,
                     is_complete_overwrite=complete_overwrite
                 )
-                logger.info("Successfully completed index update for %s", self.index_resource)
+                logger.info("✅ [%s] Successfully completed index update for %s", thread_name, self.index_resource)
 
                 # Call callback on success
                 if on_complete:
+                    logger.info("📞 [%s] Calling success callback...", thread_name)
                     try:
                         on_complete(True, None)
+                        logger.info("✅ [%s] Success callback completed", thread_name)
                     except Exception as callback_error:
-                        logger.error("Error in indexing completion callback: %s", str(callback_error))
+                        logger.error("❌ [%s] Error in indexing completion callback: %s", thread_name, str(callback_error), exc_info=True)
+                else:
+                    logger.warning("⚠️ [%s] No callback provided", thread_name)
 
                 return
 
@@ -172,13 +182,16 @@ class IndexManager:
 
         if async_mode:
             # Run indexing in background thread to avoid blocking HTTP response
+            # NO usar daemon=True para que Cloud Run no mate el thread antes de que termine
             thread = threading.Thread(
                 target=self._do_import_embeddings_sync,
                 args=(directory, complete_overwrite, max_retries, initial_delay, on_complete),
-                daemon=True
+                daemon=False,  # Cambiado de True a False para que el thread complete
+                name=f"indexing-{directory.split('/')[-1][:8]}"
             )
             thread.start()
-            logger.info("Indexing started in background thread for %s", self.index_resource)
+            logger.info("Indexing started in NON-DAEMON background thread for %s (thread: %s)",
+                       self.index_resource, thread.name)
         else:
             # Run synchronously (for testing or when immediate result is needed)
             # Note: on_complete callback is ignored in sync mode since caller gets immediate result

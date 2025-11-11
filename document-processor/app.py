@@ -13,7 +13,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import logging
 
-from utils import TextExtractor, EmbeddingGenerator, StorageManager, IndexManager
+from utils import TextExtractor, EmbeddingGenerator, StorageManager, IndexManager, PineconeManager
 
 # Configuración de logging
 logging.basicConfig(
@@ -41,18 +41,30 @@ CORS(app,
 try:
     embedding_generator = EmbeddingGenerator()
     storage_manager = StorageManager()
-    index_manager = IndexManager()
-    logger.info("Services initialized successfully")
+
+    # Usar Pinecone si está configurado, sino Matching Engine
+    use_pinecone = bool(os.environ.get("PINECONE_API_KEY"))
+
+    if use_pinecone:
+        pinecone_manager = PineconeManager()
+        index_manager = None
+        logger.info("✅ Services initialized with PINECONE (ultra-fast indexing)")
+    else:
+        index_manager = IndexManager()
+        pinecone_manager = None
+        logger.info("Services initialized with Matching Engine")
+
 except Exception as e:
     logger.error(f"Failed to initialize services: {str(e)}")
     embedding_generator = None
     storage_manager = None
     index_manager = None
+    pinecone_manager = None
 
 
 def services_ready() -> bool:
     """Verifica que los servicios requeridos estén inicializados."""
-    return bool(embedding_generator and storage_manager and index_manager)
+    return bool(embedding_generator and storage_manager and (index_manager or pinecone_manager))
 
 
 @app.route('/health', methods=['GET'])
@@ -138,28 +150,51 @@ def upload_document():
             file_size = os.path.getsize(temp_path)
             uploaded_at = datetime.now(timezone.utc).isoformat()
 
-            # File size threshold for hybrid mode: 5MB
-            FILE_SIZE_THRESHOLD = 5 * 1024 * 1024  # 5MB
-            use_async = file_size >= FILE_SIZE_THRESHOLD
-
-            # Indexación con modo híbrido: sync para archivos pequeños, async para grandes
+            # Indexación: Pinecone (rápido) o Matching Engine (lento)
             indexed = False
             index_error = None
-            indexing_status = "indexing" if use_async else "processing"
+            indexing_status = "indexing"
 
-            logger.info(
-                "Updating Matching Engine index with new embeddings (async=%s, size=%d bytes)",
-                use_async,
-                file_size
-            )
+            if pinecone_manager:
+                # PINECONE: Indexación ultra-rápida (milisegundos)
+                logger.info(
+                    "🚀 Upserting to Pinecone (fast indexing, size=%d bytes)",
+                    file_size
+                )
+                try:
+                    result = pinecone_manager.upsert_embeddings(
+                        document_id=document_id,
+                        chunks=chunks,
+                        embeddings=embeddings
+                    )
+                    indexed = True
+                    indexing_status = "ready"
+                    logger.info("✅ Document indexed in Pinecone successfully in milliseconds!")
+                except Exception as exc:
+                    logger.error(f"❌ Failed to index in Pinecone: {exc}")
+                    index_error = str(exc)
+                    indexing_status = "index_failed"
 
-            if use_async:
+            elif index_manager:
+                # MATCHING ENGINE: Indexación lenta con async
+                logger.info(
+                    "Updating Matching Engine index with new embeddings (async=True, size=%d bytes)",
+                    file_size
+                )
+                use_async = True
+
+                if True:  # Siempre asíncrono para Matching Engine
                 # Para archivos grandes: usar modo asíncrono con callback
                 def on_indexing_complete(success: bool, error_msg: str = None):
                     """Callback que se ejecuta cuando termina la indexación asíncrona"""
                     try:
+                        # IMPORTANTE: Crear nueva instancia de StorageManager para el thread
+                        # No podemos usar la instancia compartida porque puede estar en otro contexto
+                        from utils import StorageManager
+                        thread_storage = StorageManager()
+
                         # Recuperar y actualizar metadatos
-                        current_metadata = storage_manager.get_document_metadata(document_id)
+                        current_metadata = thread_storage.get_document_metadata(document_id)
                         if current_metadata:
                             current_metadata['indexed'] = success
                             current_metadata['status'] = 'ready' if success else 'index_failed'
@@ -168,22 +203,23 @@ def upload_document():
                             elif 'index_error' in current_metadata:
                                 del current_metadata['index_error']
 
-                            storage_manager.save_document_metadata(document_id, current_metadata)
+                            thread_storage.save_document_metadata(document_id, current_metadata)
                             logger.info(
-                                "Document %s indexing completed: success=%s",
+                                "✅ Document %s indexing completed: success=%s",
                                 document_id,
                                 success
                             )
                         else:
                             logger.error(
-                                "Could not update metadata for document %s after indexing",
+                                "❌ Could not update metadata for document %s after indexing",
                                 document_id
                             )
                     except Exception as callback_error:
                         logger.error(
-                            "Error updating document %s metadata after indexing: %s",
+                            "❌ Error updating document %s metadata after indexing: %s",
                             document_id,
-                            str(callback_error)
+                            str(callback_error),
+                            exc_info=True
                         )
 
                 try:
@@ -194,21 +230,9 @@ def upload_document():
                     )
                     indexed = False  # Still indexing in background
                     indexing_status = "indexing"
-                    logger.info("Document indexing started in background for large file")
+                    logger.info("Document indexing started in background")
                 except Exception as exc:
                     logger.warning("Failed to start background indexing: %s", exc)
-                    index_error = str(exc)
-                    indexing_status = "index_failed"
-
-            else:
-                # Para archivos pequeños: usar modo síncrono (bloquear hasta que termine)
-                try:
-                    index_manager.import_embeddings(embeddings_uri, async_mode=False)
-                    indexed = True
-                    indexing_status = "ready"
-                    logger.info("Document successfully indexed synchronously")
-                except Exception as exc:
-                    logger.warning("Failed to index document synchronously: %s", exc)
                     index_error = str(exc)
                     indexing_status = "index_failed"
 
@@ -237,12 +261,10 @@ def upload_document():
             metadata['uris']['metadata'] = metadata_uri
 
             # Build response message based on status
-            if indexing_status == "ready":
-                message = "Document processed and indexed successfully"
-            elif indexing_status == "indexing":
-                message = "Document processed. Indexing in progress (large file)"
+            if indexing_status == "indexing":
+                message = "Document processed. Indexing in progress in background. Use polling to check status."
             elif indexing_status == "index_failed":
-                message = "Document processed but indexing failed"
+                message = "Document processed but indexing failed to start"
             else:
                 message = "Document processing completed"
 

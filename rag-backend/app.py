@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import logging
 
-from utils import VectorSearch, LLMGenerator, ConversationManager, StorageRetriever
+from utils import VectorSearch, PineconeSearch, LLMGenerator, ConversationManager, StorageRetriever
 
 # Configuración de logging
 logging.basicConfig(
@@ -34,7 +34,16 @@ CORS(app,
 
 # Inicializar servicios
 try:
-    vector_search = VectorSearch()
+    # Usar Pinecone si está configurado, sino Matching Engine
+    use_pinecone = bool(os.environ.get("PINECONE_API_KEY"))
+
+    if use_pinecone:
+        vector_search = PineconeSearch()
+        logger.info("✅ RAG Backend initialized with PINECONE (ultra-fast search)")
+    else:
+        vector_search = VectorSearch()
+        logger.info("RAG Backend initialized with Matching Engine")
+
     llm_generator = LLMGenerator()
     conversation_manager = ConversationManager()
     storage_retriever = StorageRetriever()
@@ -120,16 +129,23 @@ def query_rag():
             }), 200
 
         # 2. Recuperar chunks de los documentos encontrados
-        logger.info(f"Retrieving chunks from {len(search_results)} search results")
         chunk_ids = [result['id'] for result in search_results]
-        chunks = storage_retriever.get_chunks_by_ids(chunk_ids)
 
-        # Log ratio of retrieved chunks
-        retrieved_ratio = len(chunks) / len(chunk_ids) if chunk_ids else 0
-        logger.info(f"Retrieved {len(chunks)}/{len(chunk_ids)} chunks ({retrieved_ratio:.1%})")
+        # Si usamos Pinecone, los chunks vienen en los resultados (mucho más rápido)
+        if use_pinecone:
+            logger.info(f"Using Pinecone results with embedded text ({len(search_results)} chunks)")
+            chunks = [result.get('text', '') for result in search_results if result.get('text')]
+        else:
+            # Matching Engine: necesitamos recuperar chunks desde GCS
+            logger.info(f"Retrieving chunks from {len(search_results)} search results from GCS")
+            chunks = storage_retriever.get_chunks_by_ids(chunk_ids)
+
+            # Log ratio of retrieved chunks
+            retrieved_ratio = len(chunks) / len(chunk_ids) if chunk_ids else 0
+            logger.info(f"Retrieved {len(chunks)}/{len(chunk_ids)} chunks ({retrieved_ratio:.1%})")
 
         if not chunks:
-            logger.warning("No chunks retrieved from storage - search found results but storage is empty")
+            logger.warning("No chunks retrieved")
             return jsonify({
                 'answer': 'Encontré documentos relevantes en el índice, pero no pude recuperar su contenido. Es posible que los documentos estén siendo procesados o haya un problema de sincronización. Por favor, intenta de nuevo en unos momentos o contacta al administrador si el problema persiste.',
                 'sources': [],
@@ -145,21 +161,47 @@ def query_rag():
                 limit=10
             )
 
-        # 4. Generar respuesta con LLM
+        # 4. Generar respuesta con LLM (o devolver chunks si LLM falla)
         logger.info("Generating answer with LLM")
-        llm_response = llm_generator.generate_answer(
-            question=question,
-            context_chunks=chunks,
-            conversation_history=conversation_history,
-            system_prompt=system_prompt,
-            response_language=response_language,
-            model_name=model_name
-        )
 
-        answer = llm_response['answer']
-        confidence = llm_response['confidence']
-        latency_ms = llm_response.get('latency_ms')
-        token_usage = llm_response.get('token_usage', {})
+        # Intentar generar respuesta con LLM
+        try:
+            llm_response = llm_generator.generate_answer(
+                question=question,
+                context_chunks=chunks,
+                conversation_history=conversation_history,
+                system_prompt=system_prompt,
+                response_language=response_language,
+                model_name=model_name
+            )
+
+            answer = llm_response['answer']
+            confidence = llm_response['confidence']
+            latency_ms = llm_response.get('latency_ms')
+            token_usage = llm_response.get('token_usage', {})
+
+        except Exception as llm_error:
+            # Si falla el LLM, devolver chunks directamente formateados
+            logger.warning(f"LLM generation failed: {str(llm_error)}, returning chunks directly")
+
+            # Formatear chunks como respuesta directa
+            answer = "📄 **Información relevante encontrada en los documentos:**\n\n"
+            for i, chunk in enumerate(chunks[:3], 1):  # Solo top 3 chunks
+                answer += f"**Fragmento {i}:**\n{chunk}\n\n"
+
+            answer += "\n⚠️ *Nota: Esta es una búsqueda directa. El sistema LLM no está disponible actualmente.*"
+
+            confidence = 0.7  # Confianza media para búsqueda directa
+            latency_ms = None
+            token_usage = {}
+
+            llm_response = {
+                'answer': answer,
+                'confidence': confidence,
+                'model': 'direct-search (no LLM)',
+                'latency_ms': latency_ms,
+                'token_usage': token_usage
+            }
 
         # 5. Extraer document_ids de los chunks
         source_documents = []
