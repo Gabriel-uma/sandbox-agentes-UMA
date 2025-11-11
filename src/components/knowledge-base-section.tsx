@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useKnowledgeBase } from "@/context/knowledge-base-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -53,12 +53,18 @@ export function KnowledgeBaseSection() {
     hasLoaded,
     error,
     refresh,
+    load,
     updateDocument,
     formatFileSize
   } = useKnowledgeBase()
 
   const [searchTerm, setSearchTerm] = useState("")
   const isInitialLoading = isLoading && !hasLoaded
+
+  // Cargar documentos al montar el componente
+  useEffect(() => {
+    load()
+  }, [load])
 
   const reindexDocument = useCallback((docId: string) => {
     updateDocument(docId, (doc) => ({
@@ -449,14 +455,16 @@ export function KnowledgeBaseSection() {
                         .sort((a, b) => b.queryCount - a.queryCount)
                         .slice(0, 3)
                         .map((doc, index) => (
-                          <div key={doc.id} className="flex items-center justify-between p-2 bg-muted rounded">
-                            <div className="flex items-center gap-2">
+                          <div key={doc.id} className="flex items-center justify-between gap-3 p-2 bg-muted rounded">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
                               <span className="w-6 h-6 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs">
                                 {index + 1}
                               </span>
-                              <span className="text-sm truncate">{doc.name}</span>
+                              <span className="text-sm truncate" title={doc.name}>{doc.name}</span>
                             </div>
-                            <Badge variant="outline">{doc.queryCount} consultas</Badge>
+                            <Badge variant="outline" className="shrink-0">
+                              {doc.queryCount} consultas
+                            </Badge>
                           </div>
                         ))}
                     </div>
